@@ -1,0 +1,46 @@
+[project]
+name = "datashare-mcp"
+version = "0.1.0"
+description = "MCP server that wraps the ICIJ datashare REST API for Claude."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Vlad Styran" }]
+license = { text = "MIT" }
+dependencies = [
+    "fastmcp>=2.0",
+    "httpx>=0.27",
+    "pydantic-settings>=2.5",
+]
+
+[project.scripts]
+datashare-mcp = "datashare_mcp.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/datashare_mcp"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "ruff>=0.6",
+    "ty",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--strict-markers -ra"
+markers = ["live: hits a real datashare instance (gated by DATASHARE_LIVE_TESTS=1)"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF", "ASYNC"]
+ignore = ["E501"]
