@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
 
 from .config import Settings
 from .errors import raise_for_status
+
+_SAFE_PATH_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_path_segment(value: str, *, field: str) -> str:
+    if not isinstance(value, str) or not _SAFE_PATH_SEGMENT.match(value):
+        raise ValueError(
+            f"invalid {field}: must match [A-Za-z0-9._-]+ (got {value!r})"
+        )
+    return value
 
 
 class DatashareClient:
@@ -41,6 +52,7 @@ class DatashareClient:
         return resp.json()
 
     async def search(self, *, project: str, query: dict[str, Any]) -> dict[str, Any]:
+        _validate_path_segment(project, field="project")
         resp = await self._http.post(
             f"/api/index/search/{project}/_search",
             json=query,
@@ -51,6 +63,8 @@ class DatashareClient:
     async def get_document_metadata(
         self, *, project: str, doc_id: str, routing: str | None = None
     ) -> dict[str, Any]:
+        _validate_path_segment(project, field="project")
+        _validate_path_segment(doc_id, field="doc_id")
         params = {"routing": routing} if routing else None
         resp = await self._http.get(f"/api/{project}/documents/{doc_id}", params=params)
         raise_for_status(resp, context="get_document_metadata")
@@ -67,6 +81,8 @@ class DatashareClient:
         target_language: str | None = None,
         resource: bool = False,
     ) -> dict[str, Any]:
+        _validate_path_segment(project, field="project")
+        _validate_path_segment(doc_id, field="doc_id")
         if (offset is None) != (limit is None):
             raise ValueError("offset and limit must be supplied together (or both omitted)")
         params: dict[str, Any] = {}
@@ -85,6 +101,7 @@ class DatashareClient:
         return resp.json()
 
     async def get_mapping(self, *, project: str) -> dict[str, Any]:
+        _validate_path_segment(project, field="project")
         resp = await self._http.get(f"/api/index/search/{project}/_mapping")
         raise_for_status(resp, context=f"datashare://index/{project}/mapping", resource=True)
         return resp.json()

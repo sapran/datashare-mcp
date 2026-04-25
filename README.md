@@ -7,6 +7,8 @@ document metadata + extracted text from your datashare instance.
 
 Single-user, stdio transport. v1 is read-only by design.
 
+> Community project. Not affiliated with or endorsed by ICIJ.
+
 ## Install
 
 ```bash

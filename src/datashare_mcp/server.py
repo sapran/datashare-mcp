@@ -45,7 +45,10 @@ def build_server(settings: Settings) -> tuple[FastMCP, DatashareClient]:
 
         Returns the raw Elasticsearch response (hits, aggregations, total).
         """
-        return await client.search(project=project, query=query)
+        try:
+            return await client.search(project=project, query=query)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
 
     @mcp.tool
     async def get_document_metadata(
@@ -56,7 +59,12 @@ def build_server(settings: Settings) -> tuple[FastMCP, DatashareClient]:
         `routing` is required for child documents (e.g., embedded files inside a parent ZIP);
         leave it None for top-level documents.
         """
-        return await client.get_document_metadata(project=project, doc_id=doc_id, routing=routing)
+        try:
+            return await client.get_document_metadata(
+                project=project, doc_id=doc_id, routing=routing
+            )
+        except ValueError as e:
+            raise ToolError(str(e)) from e
 
     @mcp.tool
     async def get_document_content(

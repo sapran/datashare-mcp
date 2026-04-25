@@ -104,3 +104,26 @@ async def test_401_propagates_as_tool_error(client, respx_mock):
     respx_mock.get("/api/project/").mock(return_value=httpx.Response(401))
     with pytest.raises(ToolError):
         await client.list_projects()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../etc",
+        "leaks/../other",
+        "leaks?x=1",
+        "leaks#frag",
+        "leaks%2F..",
+        "",
+        "leaks/",
+        "leaks ",
+    ],
+)
+async def test_rejects_unsafe_project_segments(client, bad):
+    with pytest.raises(ValueError, match="invalid project"):
+        await client.search(project=bad, query={})
+
+
+async def test_rejects_unsafe_doc_id(client):
+    with pytest.raises(ValueError, match="invalid doc_id"):
+        await client.get_document_metadata(project="leaks", doc_id="../secret")

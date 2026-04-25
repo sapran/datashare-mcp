@@ -1,16 +1,36 @@
 [project]
 name = "datashare-mcp"
-version = "0.1.0"
+dynamic = ["version"]
 description = "MCP server that wraps the ICIJ datashare REST API for Claude."
 readme = "README.md"
 requires-python = ">=3.12"
-authors = [{ name = "Vlad Styran" }]
+authors = [{ name = "Vlad Styran", email = "sapran@gmail.com" }]
 license = { text = "MIT" }
+keywords = ["mcp", "datashare", "icij", "elasticsearch", "claude", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Internet :: WWW/HTTP",
+    "Typing :: Typed",
+]
 dependencies = [
-    "fastmcp>=2.0",
+    "fastmcp>=3,<4",
     "httpx>=0.27",
     "pydantic-settings>=2.5",
 ]
+
+[project.urls]
+Homepage = "https://github.com/sapran/datashare-mcp"
+Repository = "https://github.com/sapran/datashare-mcp"
+Issues = "https://github.com/sapran/datashare-mcp/issues"
 
 [project.scripts]
 datashare-mcp = "datashare_mcp.__main__:main"
@@ -18,6 +38,9 @@ datashare-mcp = "datashare_mcp.__main__:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/datashare_mcp/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/datashare_mcp"]
