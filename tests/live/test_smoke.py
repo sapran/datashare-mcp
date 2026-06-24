@@ -41,3 +41,18 @@ async def test_mapping_parses(live_client):
 async def test_search_match_all(live_client):
     res = await live_client.search(project=PROJECT, query={"query": {"match_all": {}}, "size": 1})
     assert "hits" in res
+
+
+async def test_full_content_no_range(live_client):
+    # Regression: get_document_content with no offset/limit must not hit datashare's
+    # relational-DB path (empty for index-only docs → HTTP 500). The client probes
+    # maxOffset then fetches the whole Elasticsearch-backed range.
+    res = await live_client.search(project=PROJECT, query={"query": {"match_all": {}}, "size": 1})
+    hits = res["hits"]["hits"]
+    if not hits:
+        pytest.skip("no documents indexed")
+    doc_id = hits[0]["_id"]
+    routing = hits[0].get("_routing")
+    out = await live_client.get_document_content(project=PROJECT, doc_id=doc_id, routing=routing)
+    assert "content" in out
+    assert len(out["content"]) == out["maxOffset"]

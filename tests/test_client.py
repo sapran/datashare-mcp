@@ -54,14 +54,45 @@ async def test_get_document_metadata_with_routing(client, respx_mock):
     assert route.called
 
 
-async def test_get_document_content_no_range(client, respx_mock):
-    respx_mock.get("/api/leaks/documents/content/abc").mock(
+async def test_get_document_content_no_range_uses_es_path(client, respx_mock):
+    # With no offset/limit, datashare's no-range endpoint reads the full text from
+    # the (often empty) relational DB and 500s. The client must instead probe with
+    # limit=0 to learn maxOffset, then fetch offset=0..maxOffset via Elasticsearch.
+    seen = []
+
+    def handler(request):
+        offset = request.url.params.get("offset")
+        limit = request.url.params.get("limit")
+        seen.append((offset, limit))
+        if limit == "0":
+            return httpx.Response(
+                200, json={"content": "", "maxOffset": 5, "offset": 0, "limit": 0}
+            )
+        return httpx.Response(
+            200,
+            json={"content": "hello", "maxOffset": 5, "offset": 0, "limit": int(limit)},
+        )
+
+    respx_mock.get("/api/leaks/documents/content/abc").mock(side_effect=handler)
+    out = await client.get_document_content(project="leaks", doc_id="abc")
+    assert out["content"] == "hello"
+    assert out["maxOffset"] == 5
+    # probe (limit=0) then full (limit=maxOffset); never the broken no-range request
+    assert seen == [("0", "0"), ("0", "5")]
+
+
+async def test_get_document_content_full_empty_skips_second_call(client, respx_mock):
+    route = respx_mock.get(
+        "/api/leaks/documents/content/abc", params={"offset": "0", "limit": "0"}
+    ).mock(
         return_value=httpx.Response(
-            200, json={"content": "hello", "maxOffset": 5, "start": 0, "size": 5}
+            200, json={"content": "", "maxOffset": 0, "offset": 0, "limit": 0}
         )
     )
     out = await client.get_document_content(project="leaks", doc_id="abc")
-    assert out["content"] == "hello"
+    assert out["content"] == ""
+    assert out["maxOffset"] == 0
+    assert route.call_count == 1  # empty doc → only the probe, no full fetch
 
 
 async def test_get_document_content_with_range(client, respx_mock):

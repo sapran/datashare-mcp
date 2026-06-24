@@ -13,9 +13,7 @@ _SAFE_PATH_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 def _validate_path_segment(value: str, *, field: str) -> str:
     if not isinstance(value, str) or not _SAFE_PATH_SEGMENT.match(value):
-        raise ValueError(
-            f"invalid {field}: must match [A-Za-z0-9._-]+ (got {value!r})"
-        )
+        raise ValueError(f"invalid {field}: must match [A-Za-z0-9._-]+ (got {value!r})")
     return value
 
 
@@ -85,17 +83,46 @@ class DatashareClient:
         _validate_path_segment(doc_id, field="doc_id")
         if (offset is None) != (limit is None):
             raise ValueError("offset and limit must be supplied together (or both omitted)")
-        params: dict[str, Any] = {}
+        if offset is None and limit is None:
+            # Full content. Datashare's no-range endpoint reads the whole text from
+            # the relational DB, which is empty for index-only documents (CLI SCAN/INDEX
+            # populates Elasticsearch, not the DB) and returns HTTP 500. Use the
+            # Elasticsearch-backed ranged path instead: probe with limit=0 (a no-op
+            # substring(0,0) that still reports `maxOffset`) to learn the length, then
+            # fetch the whole range in one call.
+            probe = await self._get_content_range(
+                project, doc_id, routing, 0, 0, target_language, resource
+            )
+            max_offset = probe.get("maxOffset", 0) or 0
+            if max_offset <= 0:
+                return probe
+            return await self._get_content_range(
+                project, doc_id, routing, 0, max_offset, target_language, resource
+            )
+        # Both supplied (the half-supplied and both-omitted cases returned above).
+        assert offset is not None and limit is not None
+        return await self._get_content_range(
+            project, doc_id, routing, offset, limit, target_language, resource
+        )
+
+    async def _get_content_range(
+        self,
+        project: str,
+        doc_id: str,
+        routing: str | None,
+        offset: int,
+        limit: int,
+        target_language: str | None,
+        resource: bool,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"offset": offset, "limit": limit}
         if routing is not None:
             params["routing"] = routing
-        if offset is not None:
-            params["offset"] = offset
-            params["limit"] = limit
         if target_language is not None:
             params["targetLanguage"] = target_language
         resp = await self._http.get(
             f"/api/{project}/documents/content/{doc_id}",
-            params=params or None,
+            params=params,
         )
         raise_for_status(resp, context="get_document_content", resource=resource)
         return resp.json()
