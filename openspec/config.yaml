@@ -1,0 +1,60 @@
+schema: spec-driven
+
+# Project context (shown to AI when creating artifacts)
+context: |
+  datashare-mcp is a read-only FastMCP server over the ICIJ Datashare HTTP API.
+  Python 3.12+, managed with uv; httpx for transport, pydantic-settings for
+  configuration, fastmcp for the MCP surface. Lint and format with ruff,
+  type-check with mypy (strict). Entry point is
+  `datashare-mcp = datashare_mcp.__main__:main`.
+
+  Layout: `src/datashare_mcp/` holds `server.py` (tool and resource
+  registration), `client.py` (the async Datashare wrapper and the derived
+  analytics), `readonly.py` (the outgoing-request allowlist), `config.py`
+  (environment settings) and `errors.py`. Tests are split: `tests/` runs fully
+  mocked and is the default suite, `tests/live/` requires a real Datashare
+  instance and is not part of an ordinary run.
+
+  Datashare's own transport quirks are load-bearing and already handled; do not
+  "simplify" them away. Non-GET `/api/*` requires a matching `_ds_csrf_token`
+  cookie and `X-DS-CSRF-TOKEN` header, which the client sets to a fixed value
+  because CsrfFilter only checks equality. `get_document_content` with no
+  offset/limit must never call Datashare's unranged content path: it reads from
+  the relational `document` table, which is empty for CLI-indexed corpora, and
+  returns HTTP 500. The client probes `maxOffset` with `limit=0` and then
+  fetches the whole Elasticsearch-backed range.
+
+  The load-bearing invariant is read-only. Every outgoing request, redirect hops
+  included, is matched against a fixed allowlist of (method, path) pairs in
+  `readonly.py` and refused before it is sent, regardless of what the API key
+  or the server's mode would permit. Widening that tuple is the only way to
+  widen the surface. Treat any change touching `readonly.py` as a security
+  change.
+
+  The surface is deliberately narrow: five distinct Datashare endpoints back
+  eight tools and three resources. Derived analytics (overview, type
+  distribution, temporal distribution, summary) are aggregations computed from
+  the same `_search` endpoint, not new endpoints.
+
+# Per-artifact rules
+rules:
+  proposal:
+    - State plainly when a change is a baseline of already-shipped behaviour
+      rather than new work, and name the commit or file that shipped it.
+  specs:
+    - Prefer requirements that pin observable contract — tool names, response
+      keys, refusal behaviour — over requirements restating implementation.
+    - A requirement about the read-only guarantee must be expressed as what is
+      refused, not as what is permitted.
+    - When a requirement exists because a Datashare-side behaviour would
+      otherwise break it, name the Datashare class or route in the requirement.
+  tasks:
+    - Keep mocked-suite work and live-suite work in separate tasks; the live
+      suite needs a running Datashare instance a contributor may not have.
+
+# Per-operation guidance
+operations:
+  apply:
+    guidance:
+      - Never widen the `readonly.py` allowlist as an incidental step of
+        another task. It gets its own change.
