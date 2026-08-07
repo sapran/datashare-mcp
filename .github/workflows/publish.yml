@@ -4,14 +4,32 @@ on:
   release:
     types: [published]
 
+# Least privilege by default. Without this, every job inherits the repository's default
+# GITHUB_TOKEN scopes; the publish job below re-declares what it actually needs.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      digests: ${{ steps.digests.outputs.digests }}
     steps:
-      - uses: actions/checkout@v4
+      # Every `uses:` is pinned to a full commit SHA. A tag is mutable and a branch ref
+      # (`@release/v1`) is force-pushable, so either lets whoever controls the upstream
+      # ref execute code in this workflow — and the publish job below holds the PyPI
+      # trusted-publisher identity. The trailing comment is the human-readable version;
+      # dependabot.yml bumps both together.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # checkout leaves the token in .git/config by default, where every later step
+          # in the job can read it — including the PEP 517 build backend, which is
+          # arbitrary Python resolved from PyPI at build time. This job needs the tree,
+          # not the token.
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
 
@@ -21,7 +39,19 @@ jobs:
       - name: Build distributions
         run: uv build
 
-      - uses: actions/upload-artifact@v4
+      - name: Record artifact digests
+        id: digests
+        # Carried to the publish job so the handoff is checked rather than trusted.
+        run: |
+          cd dist
+          {
+            echo 'digests<<SHA256EOF'
+            sha256sum -- *
+            echo 'SHA256EOF'
+          } >> "$GITHUB_OUTPUT"
+          sha256sum -- *
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist
           path: dist/
@@ -35,10 +65,25 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: dist
           path: dist/
 
+      - name: Verify the artifacts are the ones the build job produced
+        env:
+          # Through the environment, never interpolated into the script body.
+          DIGESTS: ${{ needs.build.outputs.digests }}
+        run: |
+          cd dist
+          printf '%s\n' "$DIGESTS" | sha256sum --check --strict -
+
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        # id-token: write above means this step can mint the OIDC token PyPI exchanges
+        # for a project-scoped upload token. Possession of that capability IS the
+        # credential, so this ref in particular must never be mutable.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          # PEP 740 provenance, signed with the same OIDC identity. Gives consumers a
+          # verifiable statement of which workflow, at which commit, built the artifact.
+          attestations: true

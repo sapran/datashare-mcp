@@ -39,7 +39,10 @@ Issues = "https://github.com/sapran/datashare-mcp/issues"
 datashare-mcp = "datashare_mcp.__main__:main"
 
 [build-system]
-requires = ["hatchling"]
+# Bounded like the runtime dependencies. `uv build` resolves build requirements from PyPI
+# at build time in an isolated PEP 517 environment that uv.lock does not cover, so nothing
+# else constrains the code that actually constructs the artifact.
+requires = ["hatchling>=1.25,<2"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]

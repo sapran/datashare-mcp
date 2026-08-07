@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [main, develop]
 
+# Least privilege. This job comments on nothing, uploads nothing and pushes nothing, so a
+# read-only token is the whole of what it needs. It does execute the full third-party
+# dependency tree — `uv sync --all-extras` runs build backends, `uv run pytest` imports
+# and runs the result — and the `push:` trigger above is not covered by GitHub's forced
+# read-only token for fork pull requests.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -14,10 +22,16 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to commit SHAs for the same reason as publish.yml: a tag is mutable, so
+      # `@v4` is a promise from whoever can move it. dependabot.yml bumps these.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Otherwise the token lands in .git/config, readable by every dependency this
+          # job then installs and executes. The tests need the tree, not the token.
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
 
