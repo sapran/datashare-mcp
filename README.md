@@ -74,8 +74,9 @@ Then **quit Claude.app fully (Cmd-Q) and relaunch** -- closing the window keeps 
 
 ## Local environment
 
-A working local deployment — Docker topology, corpus ingest, project registration,
-API-key handling and troubleshooting — is documented in
+A local Datashare to develop and test against is a Docker Compose project:
+`docker compose up -d` from the repository root. The topology, corpus ingest, project
+registration, API-key handling and troubleshooting are documented in
 [`docs/local-environment.md`](docs/local-environment.md).
 
 ## What Claude can do
