@@ -12,7 +12,8 @@
 #   docker compose logs -f app    follow the server log
 #   docker compose down           stop and remove containers, KEEPING the data
 #
-# Never `docker compose down -v`. See the `volumes:` block at the bottom.
+# The two data volumes are `external`, so NO compose command can delete them, `down -v`
+# included. Only `docker volume rm` and `docker ... prune` can. See the `volumes:` block.
 #
 # Full runbook: docs/local-environment.md
 
@@ -21,8 +22,18 @@ name: datashare
 services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.19.8
+    # As on the Aleph stack. Also covers the case where Docker Desktop restarts and
+    # leaves every container without a policy stopped — observed on this machine.
+    restart: on-failure
+    # A cgroup ceiling on top of the 2 GB heap, so that when this VM runs out of memory
+    # the kernel kills the container that exceeded its own budget instead of an arbitrary
+    # neighbour. Exit 137 on this container then means this container, legibly.
+    mem_limit: 3g
     ports:
-      - "9201:9200"
+      # Loopback only, as the sibling Aleph stack binds every published port. This
+      # Elasticsearch runs with xpack.security.enabled=false, so anything that can reach
+      # the port has unauthenticated read and write access to the index.
+      - "127.0.0.1:9201:9200"
     environment:
       # Carried over unchanged from the original deployment, not tuned. The existing
       # index was created under these watermarks, and flood_stage=100% means Elasticsearch
@@ -42,7 +53,14 @@ services:
       # `app` waits on this. Without it the two containers start together, the app's JVM
       # caches the failed DNS lookup for `elasticsearch`, and every /api/index/... call
       # answers HTTP 500 with UnknownHostException until the app is restarted by hand.
-      test: ["CMD-SHELL", "curl -sf localhost:9200/_cluster/health || exit 1"]
+      #
+      # `wait_for_status=yellow` matters: a bare /_cluster/health answers 200 whatever the
+      # colour, so a RED cluster (tenderchad unassigned or corrupt) would report healthy
+      # and the app would start against an unusable index. A single-node cluster never
+      # reaches green — it has no replicas — so yellow is the correct bar.
+      test:
+        - CMD-SHELL
+        - curl -sf 'localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s' || exit 1
       interval: 5s
       timeout: 5s
       retries: 30
@@ -50,17 +68,38 @@ services:
 
   app:
     image: icij/datashare:21.2.1-ui
+    # This image exists only on this machine: it was built from a source tree that no
+    # longer exists locally and is archived at ~/backups/icij-datashare-21.2.1-ui.tar.gz.
+    # `icij/datashare` is also a public Docker Hub repository, so without this a lost
+    # local image would be silently replaced by whatever that tag resolves to upstream —
+    # a different build, run against volumes only 21.2.1 should touch. Fail instead, and
+    # recover with `docker load -i`.
+    pull_policy: never
+    restart: on-failure
+    mem_limit: 3g
     depends_on:
       elasticsearch:
         condition: service_healthy
     ports:
-      - "8888:8080"
+      # Loopback only. LOCAL mode does NOT enforce API-key authentication — it binds only
+      # CsrfFilter and LocalUserFilter, never ApiKeyFilter — so anything that can reach
+      # this port has full read AND write access to the corpus, key or no key. Publishing
+      # it on 0.0.0.0 would expose that to every network the laptop joins.
+      - "127.0.0.1:8888:8080"
     environment:
       DATASHARE_SYNC_NLP_MODELS: "false"
       DS_JAVA_OPTS: "-Xmx2g"
     volumes:
       - dist:/home/datashare/dist
-      - ${DATASHARE_DATA_DIR:-./data}:/home/datashare/data:ro
+      # Long syntax for create_host_path: false. The short form conjures a missing source
+      # directory as an empty one, which would start a healthy-looking instance serving
+      # nothing. `:?` above catches an unset variable; this catches a wrong one.
+      - type: bind
+        source: ${DATASHARE_DATA_DIR:?set DATASHARE_DATA_DIR in .env — see docs/local-environment.md}
+        target: /home/datashare/data
+        read_only: true
+        bind:
+          create_host_path: false
     # `--bind 0.0.0.0` is REQUIRED: LOCAL mode otherwise binds localhost-only inside the
     # container, which the port mapping cannot reach.
     command:
@@ -74,6 +113,14 @@ services:
   #
   # Both share the app's volumes and must not run while `app` is up: two processes must
   # never write the same SQLite file. Stop it first with `docker compose stop app`.
+  #
+  # Always invoke them as `--profile tools run --rm <service>`. Two ways to get this
+  # wrong, neither of which anything here can prevent:
+  #   * `--profile tools up` starts BOTH as long-running services next to a live app.
+  #   * COMPOSE_PROFILES=tools in .env arms the profile for every later command,
+  #     including a plain `docker compose up -d`. Never set it there.
+  # Either mints an unrequested API key, invalidating the one in the Keychain, and starts
+  # a full re-index against a live SQLite.
 
   ingest:
     # docker compose --profile tools run --rm ingest
@@ -84,6 +131,7 @@ services:
     # and runs CLI mode identically.
     profiles: ["tools"]
     image: icij/datashare:21.2.1-ui
+    pull_policy: never
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -92,7 +140,14 @@ services:
       DS_JAVA_OPTS: "-Xmx3g"
     volumes:
       - dist:/home/datashare/dist
-      - ${DATASHARE_DATA_DIR:-./data}:/home/datashare/data:ro
+      # Same create_host_path: false as `app` — an ingest that silently indexes an empty
+      # auto-created directory is the worst possible outcome here.
+      - type: bind
+        source: ${DATASHARE_DATA_DIR:?set DATASHARE_DATA_DIR in .env — see docs/local-environment.md}
+        target: /home/datashare/data
+        read_only: true
+        bind:
+          create_host_path: false
     command:
       - --mode=CLI
       - --dataDir=/home/datashare/data
@@ -106,8 +161,12 @@ services:
     # Mints a fresh API key; Datashare cannot retrieve an existing one. Look for
     # "generated secret key for user local ...: <KEY>" and put it in the login Keychain:
     #   security add-generic-password -U -a "$USER" -s datashare-mcp -w
+    #
+    # The key is printed in CLEARTEXT. Keep `--rm` so no container log retains it, clear
+    # the scrollback afterwards, and never paste the output into an issue or a screenshot.
     profiles: ["tools"]
     image: icij/datashare:21.2.1-ui
+    pull_policy: never
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -123,10 +182,23 @@ volumes:
   # would create empty `datashare_es-data` / `datashare_dist`, presenting an instance with
   # no projects and no documents while the real data sat untouched under the old names.
   #
-  # These two are the only copy of the 4884-document `tenderchad` index and of the SQLite
-  # project rows and API-key hash. `docker compose down -v` deletes both. Use
-  # `docker compose down`.
+  # `external: true` is the other half. These two volumes are the only copy of the
+  # 4884-document `tenderchad` index and of the SQLite project rows and API-key hash, and
+  # rebuilding them means a full re-ingest. Declaring them external puts them outside this
+  # project's lifecycle, so `docker compose down -v` — a single stray flag on the ordinary
+  # teardown command — cannot delete them. Under the `docker run` setup this file replaces,
+  # no compose command could reach them at all; external keeps that property.
+  #
+  # The cost is one command on a machine that has never run this stack:
+  #
+  #   docker volume create datashare-es-data
+  #   docker volume create datashare-dist
+  #
+  # Without them `up` fails with `external volume "datashare-es-data" not found`, which is
+  # a far better first run than silently starting an empty instance.
   es-data:
+    external: true
     name: datashare-es-data
   dist:
+    external: true
     name: datashare-dist

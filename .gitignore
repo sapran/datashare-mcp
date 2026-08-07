@@ -11,3 +11,7 @@ dist/
 .env
 .env.local
 .DS_Store
+
+# Default corpus directory for docker-compose.yml (${DATASHARE_DATA_DIR:-./data}).
+# Never commit corpus documents.
+/data/
