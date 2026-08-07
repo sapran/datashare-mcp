@@ -1,0 +1,6 @@
+schema: spec-driven
+created: 2026-08-07
+# Tooling and documentation only: the MCP server's observable behaviour is unchanged, so
+# no capability's requirements move. Nothing in openspec/specs/ describes how the local
+# Datashare under test is started.
+skip_specs: true

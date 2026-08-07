@@ -1,0 +1,132 @@
+# Local ICIJ Datashare for developing and testing datashare-mcp.
+#
+# This deploys the SERVER UNDER TEST, not the MCP server in this repository. The MCP
+# server runs on the host as a stdio subprocess of your MCP client; see README.md.
+#
+# It is designed to run ALONGSIDE the local Aleph stack, which holds ports 8080, 9200 and
+# 5000. Datashare is published on 8888 and its Elasticsearch on 9201. Only the host
+# mapping moves — the containers still listen on 8080 and 9200 internally.
+#
+#   docker compose up -d          start
+#   docker compose ps             status
+#   docker compose logs -f app    follow the server log
+#   docker compose down           stop and remove containers, KEEPING the data
+#
+# Never `docker compose down -v`. See the `volumes:` block at the bottom.
+#
+# Full runbook: docs/local-environment.md
+
+name: datashare
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.8
+    ports:
+      - "9201:9200"
+    environment:
+      # Carried over unchanged from the original deployment, not tuned. The existing
+      # index was created under these watermarks, and flood_stage=100% means Elasticsearch
+      # will not go read-only until the disk is completely full — keep real headroom on
+      # the host rather than relaxing anything here.
+      ES_JAVA_OPTS: "-Xms2g -Xmx2g"
+      discovery.type: single-node
+      cluster.name: datashare
+      cluster.routing.allocation.disk.watermark.low: "90%"
+      cluster.routing.allocation.disk.watermark.high: "99%"
+      cluster.routing.allocation.disk.watermark.flood_stage: "100%"
+      xpack.security.enabled: "false"
+      indices.id_field_data.enabled: "true"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      # `app` waits on this. Without it the two containers start together, the app's JVM
+      # caches the failed DNS lookup for `elasticsearch`, and every /api/index/... call
+      # answers HTTP 500 with UnknownHostException until the app is restarted by hand.
+      test: ["CMD-SHELL", "curl -sf localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  app:
+    image: icij/datashare:21.2.1-ui
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    ports:
+      - "8888:8080"
+    environment:
+      DATASHARE_SYNC_NLP_MODELS: "false"
+      DS_JAVA_OPTS: "-Xmx2g"
+    volumes:
+      - dist:/home/datashare/dist
+      - ${DATASHARE_DATA_DIR:-./data}:/home/datashare/data:ro
+    # `--bind 0.0.0.0` is REQUIRED: LOCAL mode otherwise binds localhost-only inside the
+    # container, which the port mapping cannot reach.
+    command:
+      - --mode=LOCAL
+      - --bind=0.0.0.0
+      - --dataDir=/home/datashare/data
+      - --defaultProject=tenderchad
+      - --elasticsearchAddress=http://elasticsearch:9200
+
+  # --- one-shot operations, not started by `up` --------------------------------
+  #
+  # Both share the app's volumes and must not run while `app` is up: two processes must
+  # never write the same SQLite file. Stop it first with `docker compose stop app`.
+
+  ingest:
+    # docker compose --profile tools run --rm ingest
+    #
+    # Re-ingests the corpus. Only needed if the index is lost. The CLI JVM may hang after
+    # "exiting main"; once "drained N documents" appears it is done, Ctrl-C it.
+    # The plain icij/datashare:21.2.1 tag is no longer on this machine; -ui is a superset
+    # and runs CLI mode identically.
+    profiles: ["tools"]
+    image: icij/datashare:21.2.1-ui
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      DATASHARE_SYNC_NLP_MODELS: "false"
+      DS_JAVA_OPTS: "-Xmx3g"
+    volumes:
+      - dist:/home/datashare/dist
+      - ${DATASHARE_DATA_DIR:-./data}:/home/datashare/data:ro
+    command:
+      - --mode=CLI
+      - --dataDir=/home/datashare/data
+      - --defaultProject=tenderchad
+      - --stages=SCAN,INDEX
+      - --elasticsearchAddress=http://elasticsearch:9200
+
+  apikey:
+    # docker compose --profile tools run --rm apikey
+    #
+    # Mints a fresh API key; Datashare cannot retrieve an existing one. Look for
+    # "generated secret key for user local ...: <KEY>" and put it in the login Keychain:
+    #   security add-generic-password -U -a "$USER" -s datashare-mcp -w
+    profiles: ["tools"]
+    image: icij/datashare:21.2.1-ui
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - dist:/home/datashare/dist
+    command:
+      - --mode=CLI
+      - --createApiKey=local
+      - --elasticsearchAddress=http://elasticsearch:9200
+
+volumes:
+  # `name:` is load-bearing. Compose otherwise prefixes volumes with the project name and
+  # would create empty `datashare_es-data` / `datashare_dist`, presenting an instance with
+  # no projects and no documents while the real data sat untouched under the old names.
+  #
+  # These two are the only copy of the 4884-document `tenderchad` index and of the SQLite
+  # project rows and API-key hash. `docker compose down -v` deletes both. Use
+  # `docker compose down`.
+  es-data:
+    name: datashare-es-data
+  dist:
+    name: datashare-dist
