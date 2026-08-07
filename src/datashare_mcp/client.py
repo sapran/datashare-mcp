@@ -8,6 +8,7 @@ import httpx
 
 from .config import Settings
 from .errors import raise_for_status
+from .readonly import read_only_hook
 
 _SAFE_PATH_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -38,6 +39,7 @@ class DatashareClient:
                 "X-DS-CSRF-TOKEN": csrf_token,
             },
             cookies={"_ds_csrf_token": csrf_token},
+            event_hooks={"request": [read_only_hook(settings.url)]},
             timeout=settings.timeout_secs,
             verify=settings.verify_tls,
         )
