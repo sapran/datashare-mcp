@@ -35,6 +35,63 @@ def build_server(settings: Settings) -> tuple[FastMCP, DatashareClient]:
         return await client.list_projects()
 
     @mcp.tool
+    async def get_project_overview(project: str) -> dict[str, Any]:
+        """Get high-level statistics about a Datashare project.
+
+        Returns total document count, language distribution, and date range.
+        Use this as the starting point for project summarization.
+        """
+        try:
+            return await client.get_project_overview(project=project)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+
+    @mcp.tool
+    async def get_document_type_distribution(project: str) -> dict[str, Any]:
+        """Analyze document content types with counts and percentages.
+
+        Groups related types (e.g., DOC + DOCX as "Word Documents").
+        Returns distribution sorted by count descending.
+        """
+        try:
+            return await client.get_document_type_distribution(project=project)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+
+    @mcp.tool
+    async def get_temporal_distribution(project: str) -> dict[str, Any]:
+        """Get document counts grouped by year with peak detection.
+
+        Returns yearly distribution and highlights significant spikes
+        (years with >2x median document count).
+        """
+        try:
+            return await client.get_temporal_distribution(project=project)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+
+    @mcp.tool
+    async def get_project_summary(project: str, format: str = "json") -> dict[str, Any]:
+        """Generate comprehensive project summary.
+
+        Combines all analyses into a single summary including:
+        - Document counts and language distribution
+        - Document type breakdown with grouping
+        - Temporal distribution with peak detection
+        - Document structure analysis
+        - Data quality assessment
+        - Automatic insights and suggestions
+
+        Args:
+            project: Project name
+            format: "json" (default) or "markdown"
+        """
+        try:
+            return await client.get_project_summary(project=project, format=format)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+
+    @mcp.tool
     async def search_documents(project: str, query: dict[str, Any]) -> dict[str, Any]:
         """Run a raw Elasticsearch DSL query against a project's index.
 
