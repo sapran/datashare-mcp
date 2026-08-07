@@ -66,6 +66,11 @@ services:
       # caller-supplied query would use: `field` is what Datashare's substring needs;
       # `aggs` (scripted_metric) and `score` (script_score, function_score) are not
       # granted, so those are refused by the node even if the client guard is bypassed.
+      #
+      # Not covered, and worth knowing before anyone relaxes the client guard on the
+      # strength of this: `script_fields` and a search-body `runtime_mappings` script both
+      # run in the `field` context too, so this setting cannot refuse them without also
+      # breaking get_document_content. `_scan_body` is the only control on those two.
       script.allowed_contexts: "field"
     volumes:
       - es-data:/usr/share/elasticsearch/data

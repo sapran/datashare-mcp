@@ -138,8 +138,9 @@ async def test_search_allows_a_plain_terms_filter_and_terms_aggregation(client, 
     assert body_seen == query
 
 
-async def test_search_clamps_size_and_from(client, respx_mock, settings):
-    """An over-large page is a cost problem, so it is clamped, not refused."""
+async def test_search_clamps_size_but_refuses_an_over_large_from(client, respx_mock, settings):
+    """`size` is a page size — clamping returns fewer hits and `hits.total` still tells
+    the truth. `from` is a cursor — clamping it silently answers a different question."""
     body_seen = {}
 
     def handler(request):
@@ -149,11 +150,62 @@ async def test_search_clamps_size_and_from(client, respx_mock, settings):
         return httpx.Response(200, json=search_payload())
 
     respx_mock.post("/api/index/search/leaks/_search").mock(side_effect=handler)
-    query = {"query": {"match_all": {}}, "size": 10000, "from": 99999}
+    query = {"query": {"match_all": {}}, "size": 10000}
     await client.search(project="leaks", query=query)
     assert body_seen["size"] == settings.max_search_size
-    assert body_seen["from"] == settings.max_search_size
     assert query["size"] == 10000, "the caller's dict must not be mutated"
+
+    with pytest.raises(ValueError, match="exceeds the configured maximum"):
+        await client.search(project="leaks", query={"from": 99999})
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param({"query": {"term": {"from": "alice@example.com"}}}, id="from-is-a-field"),
+        pytest.param(
+            {"query": {"range": {"creationDate": {"from": "2020-01-01", "to": "2021-01-01"}}}},
+            id="from-is-a-range-bound",
+        ),
+        pytest.param({"query": {"match": {"description": "kremlin"}}}, id="description-field"),
+        pytest.param(
+            {"query": {"term": {"tika_metadata_dc_description": "x"}}}, id="tika-description"
+        ),
+    ],
+)
+async def test_ordinary_corpus_queries_are_not_refused(client, respx_mock, query):
+    """`size`/`from` are pagination only at the top level, and the script rule matches a
+    token, not the letters: an email corpus searches a `from` field, and `description`
+    merely contains \"script\"."""
+    body_seen = {}
+
+    def handler(request):
+        import json
+
+        body_seen.update(json.loads(request.content))
+        return httpx.Response(200, json=search_payload())
+
+    respx_mock.post("/api/index/search/leaks/_search").mock(side_effect=handler)
+    await client.search(project="leaks", query=query)
+    assert body_seen == query, "the body must reach Datashare unaltered"
+
+
+async def test_aggregation_size_is_clamped(client, respx_mock, settings):
+    """Inside `aggs`, `size` is always a cardinality — and `_id` fielddata is enabled on
+    the shipped stack, so an unbounded terms agg is the cheap way to exhaust the heap."""
+    body_seen = {}
+
+    def handler(request):
+        import json
+
+        body_seen.update(json.loads(request.content))
+        return httpx.Response(200, json=search_payload())
+
+    respx_mock.post("/api/index/search/leaks/_search").mock(side_effect=handler)
+    await client.search(
+        project="leaks", query={"aggs": {"a": {"terms": {"field": "_id", "size": 100000}}}}
+    )
+    assert body_seen["aggs"]["a"]["terms"]["size"] == settings.max_search_size
 
 
 async def test_search_rejects_a_non_object_body(client, respx_mock):

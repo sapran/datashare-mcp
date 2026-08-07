@@ -40,7 +40,7 @@ def failure_message(e: Exception, *, context: str) -> str:
 
 
 def raise_for_status(
-    resp: httpx.Response, *, context: str, resource: bool = False, body: str | None = None
+    resp: httpx.Response, *, context: str, body: str, resource: bool = False
 ) -> None:
     """Convert non-2xx HTTP responses to MCP errors. No-op for 2xx.
 
@@ -58,9 +58,10 @@ def raise_for_status(
         return
 
     err_cls = ResourceError if resource else ToolError
-    # `body` is supplied by the streaming reader, which has already bounded what it
-    # accepted; falling back to resp.text is for callers holding a fully-read response.
-    text = resp.text if body is None else body
+    # Required, not defaulted to resp.text: every response this server produces is drained
+    # via `aiter_bytes()`, and `resp.text` on such a response raises ResponseNotRead. A
+    # fallback would invite the next call site to omit it and fail on the error path.
+    text = body
     # Bounded: the log is a debugging aid, not a place to spool an unbounded upstream
     # body into the operator's terminal or log file.
     logger.debug("%s: HTTP %s from Datashare: %.4096s", context, resp.status_code, text)

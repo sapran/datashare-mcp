@@ -19,9 +19,21 @@ from .readonly import _SEGMENT, read_only_hook
 _SAFE_PATH_SEGMENT = re.compile(_SEGMENT)
 
 
+# Elasticsearch reads these as "every index", so they would address the whole cluster
+# through a path shaped like one project. No Datashare project is named this way; what
+# stops them today is Datashare's own grant check, which readonly.py argues at length is
+# not a defence this client may rely on.
+_RESERVED_INDEX_NAMES = frozenset({"_all", "_any", "_none"})
+
+
 def _validate_path_segment(value: str, *, field: str) -> str:
     if not isinstance(value, str) or not _SAFE_PATH_SEGMENT.fullmatch(value):
         raise ValueError(f"invalid {field}: must match {_SEGMENT} (got {value!r})")
+    if field == "project" and value.lower() in _RESERVED_INDEX_NAMES:
+        raise ValueError(
+            f"invalid project: {value!r} is an Elasticsearch alias for every index, "
+            "not a project; call list_projects"
+        )
     return value
 
 
@@ -32,28 +44,36 @@ def _validate_path_segment(value: str, *, field: str) -> str:
 #
 #   * Painless execution on the Elasticsearch node. Read-only in intent, arbitrary
 #     computation in fact.
-#   * a `terms` clause may carry a *lookup* — {"terms": {"f": {"index": "other-project",
-#     "id": "1", "path": "x"}}} — which reads a document out of an index this request's
-#     path never named, so Datashare's path-based grant check does not cover it.
+#   * a clause carrying a document *reference* — {"index": "other-project", "id": "1"} —
+#     which reads a document out of an index this request's path never named, so
+#     Datashare's path-based grant check does not cover it.
 #
-# Scripting is matched by RULE, not by an enumerated list. An earlier version of this
-# guard listed four spellings — script, script_fields, script_score, runtime_mappings —
-# and a `scripted_metric` aggregation walked straight through it, because its Painless
-# lives under init_script / map_script / combine_script / reduce_script and the
-# aggregation name is not the literal `script`. Elasticsearch keeps adding script-bearing
-# constructs; a list of their names will keep losing to the next one. Every such key in
-# the DSL contains the substring "script", so that is what is matched.
+# Scripting is matched by RULE, not by an enumerated list. An earlier version listed four
+# spellings — script, script_fields, script_score, runtime_mappings — and a
+# `scripted_metric` aggregation walked straight through it, because its Painless lives
+# under init_script / map_script / combine_script / reduce_script.
 #
-# The cost is a false positive on a *corpus field* literally named "script"
-# ({"match": {"script": "..."}}). That is rare, and the refusal is explicit rather than
-# silent — the right way round for this trade.
+# Matched at a TOKEN BOUNDARY, not as a bare substring. Every script-bearing DSL key is
+# either `script...` or `..._script`; a bare `"script" in key` also rejects `description`
+# — and therefore `{"match": {"description": ...}}`, plus every Tika-derived
+# `..._dc_description` field — with a message about server-side scripting that gives the
+# caller nothing to act on. The refusal must land on the construct, not on the letters.
 #
-# `runtime_mappings` is the one script-bearing construct whose name does not contain
-# "script", so it stays named.
-_SCRIPT_KEY = "script"
-_FORBIDDEN_BODY_KEYS = frozenset({"runtime_mappings"})
-# A terms lookup is exactly these keys; a plain terms filter is a list of values.
-_TERMS_LOOKUP_KEYS = frozenset({"index", "id", "path", "routing"})
+# `runtime_mappings` is the one script-bearing construct whose name contains no `script`
+# token, and `more_like_this` fetches documents by reference, so both stay named.
+_SCRIPT_KEY = re.compile(r"(?:^|_)script")
+_FORBIDDEN_BODY_KEYS = frozenset({"runtime_mappings", "more_like_this"})
+# A cross-index document reference, matched by SHAPE rather than by the name of the clause
+# holding it. An earlier version keyed this on the parent being literally `terms`, which
+# caught the terms lookup and missed every other spelling of the same primitive:
+# `geo_shape.indexed_shape` uses the identical {index, id, path, routing} keys under a
+# different parent, `percolate` uses {index, id}, and `pinned.docs` uses {_index, _id}.
+# All of them make Elasticsearch read a document out of an index the request path never
+# named, which is the property this rule exists to deny — so the rule is the shape.
+_DOC_REFERENCE_KEYS: tuple[frozenset[str], ...] = (
+    frozenset({"index", "id"}),
+    frozenset({"_index", "_id"}),
+)
 # Bounds the recursive scan. Deeper than this is not a query anyone writes by hand, and
 # an unbounded walk on caller-supplied JSON is its own denial of service.
 _MAX_BODY_DEPTH = 32
@@ -64,46 +84,85 @@ def _scan_body(node: Any, *, depth: int = 0) -> None:
     if depth > _MAX_BODY_DEPTH:
         raise ValueError(f"invalid query: nested deeper than {_MAX_BODY_DEPTH} levels")
     if isinstance(node, dict):
+        if any(required <= node.keys() for required in _DOC_REFERENCE_KEYS):
+            raise ValueError(
+                "invalid query: a document lookup reads from an index outside the "
+                "project in the request path; pass literal values instead"
+            )
         for key, value in node.items():
             if isinstance(key, str) and (
-                _SCRIPT_KEY in key.lower() or key in _FORBIDDEN_BODY_KEYS
+                _SCRIPT_KEY.search(key.lower()) or key in _FORBIDDEN_BODY_KEYS
             ):
                 raise ValueError(
                     f"invalid query: {key!r} is not allowed — this server forwards only "
                     "declarative read queries, not server-side scripting"
                 )
-            if key == "terms" and isinstance(value, dict):
-                for clause in value.values():
-                    if isinstance(clause, dict) and _TERMS_LOOKUP_KEYS & clause.keys():
-                        raise ValueError(
-                            "invalid query: a terms lookup reads from an index outside "
-                            "the project in the request path; pass literal values instead"
-                        )
             _scan_body(value, depth=depth + 1)
     elif isinstance(node, list):
         for item in node:
             _scan_body(item, depth=depth + 1)
 
 
+def _bounded_int(value: Any, *, key: str, max_size: int, clamp: bool) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"invalid query: {key!r} must be an integer")
+    if value < 0:
+        raise ValueError(f"invalid query: {key!r} must not be negative")
+    if not clamp and value > max_size:
+        raise ValueError(
+            f"invalid query: {key!r} of {value} exceeds the configured maximum "
+            f"{max_size}; narrow the query, or sort and use search_after"
+        )
+    return min(value, max_size)
+
+
+def _clamp_agg_sizes(node: Any, *, max_size: int) -> Any:
+    """Copy an `aggs` subtree, clamping every `size` it contains.
+
+    Inside an aggregation, `size` is always a cardinality — on `terms`, on `top_hits`, on
+    a nested `aggs` — so bounding it here is safe and is what stops
+    `{"terms": {"field": "_id", "size": 100000}}` loading every document id into fielddata
+    on a 1 GB heap.
+    """
+    if isinstance(node, dict):
+        return {
+            key: (
+                _bounded_int(value, key=key, max_size=max_size, clamp=True)
+                if key == "size"
+                else _clamp_agg_sizes(value, max_size=max_size)
+            )
+            for key, value in node.items()
+        }
+    if isinstance(node, list):
+        return [_clamp_agg_sizes(item, max_size=max_size) for item in node]
+    return node
+
+
 def _validate_search_body(query: Any, *, max_size: int) -> dict[str, Any]:
     """Return a safe copy of an Elasticsearch request body, or raise ValueError.
 
-    `size` and `from` are clamped rather than refused: an over-large page is a cost
-    problem, not an authorization one, and clamping keeps the caller's query working.
+    `size` and `from` are pagination ONLY at the top level of the body, and `size` again
+    inside `aggs`. Everywhere else they are field names or range bounds a corpus query
+    legitimately uses — `{"term": {"from": "alice@example.com"}}` on an email corpus,
+    `{"range": {"creationDate": {"from": "2020-01-01"}}}` — so the walk must not treat
+    them as pagination. Descending blindly turned both of those into hard errors.
+
+    Top-level `size` is clamped; top-level `from` is refused. A clamped page size returns
+    fewer hits and `hits.total` still reports the truth. A clamped `from` is a cursor
+    silently moved: the caller asked for hits 1000-1020 and would receive 200-220, with
+    nothing in the response saying so — a wrong answer, not a cheaper one.
     """
     if not isinstance(query, dict):
         raise ValueError(f"invalid query: must be an object (got {type(query).__name__})")
     _scan_body(query)
     body = dict(query)
-    for field in ("size", "from"):
-        value = body.get(field)
-        if isinstance(value, bool) or not isinstance(value, int):
-            if value is not None:
-                raise ValueError(f"invalid query: {field!r} must be an integer")
-            continue
-        if value < 0:
-            raise ValueError(f"invalid query: {field!r} must not be negative")
-        body[field] = min(value, max_size)
+    for key, clamp in (("size", True), ("from", False)):
+        if key in body:
+            body[key] = _bounded_int(body[key], key=key, max_size=max_size, clamp=clamp)
+    if "aggs" in body:
+        body["aggs"] = _clamp_agg_sizes(body["aggs"], max_size=max_size)
+    if "aggregations" in body:
+        body["aggregations"] = _clamp_agg_sizes(body["aggregations"], max_size=max_size)
     return body
 
 
@@ -118,7 +177,9 @@ def _coerce_max_offset(raw: Any) -> int:
         return 0
     try:
         value = int(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # json.loads accepts the non-standard `Infinity` literal, and int(float('inf'))
+        # raises OverflowError — neither TypeError nor ValueError, so it would escape.
         return 0
     return max(value, 0)
 
@@ -204,14 +265,16 @@ class DatashareClient:
                     if declared is not None and declared.isdigit() and int(declared) > ceiling:
                         raise ValueError(
                             f"{context}: response of {declared} bytes exceeds the "
-                            f"{ceiling}-byte ceiling; request a smaller range"
+                            f"{ceiling}-byte ceiling; request less — a smaller `size` or "
+                            "`_source` for a search, a smaller offset/limit for content"
                         )
                     async for chunk in resp.aiter_bytes():
                         total += len(chunk)
                         if total > ceiling:
                             raise ValueError(
                                 f"{context}: response exceeded the {ceiling}-byte ceiling "
-                                "mid-stream; request a smaller range"
+                                "mid-stream; request less — a smaller `size` or `_source` "
+                                "for a search, a smaller offset/limit for content"
                             )
                         chunks.append(chunk)
                     body = b"".join(chunks).decode("utf-8", "replace")
@@ -275,6 +338,10 @@ class DatashareClient:
         _validate_path_segment(doc_id, field="doc_id")
         if (offset is None) != (limit is None):
             raise ValueError("offset and limit must be supplied together (or both omitted)")
+        if (offset is not None and offset < 0) or (limit is not None and limit < 0):
+            # Same rule the search body gets. Without it a negative bound reaches
+            # Datashare's Painless substring and comes back as an opaque upstream 500.
+            raise ValueError("offset and limit must not be negative")
         cap = self._settings.max_content_bytes
         if offset is None and limit is None:
             # Full content. Datashare's no-range endpoint reads the whole text from
@@ -347,12 +414,16 @@ class DatashareClient:
         """Generate comprehensive project summary combining all analyses."""
         _validate_path_segment(project, field="project")
 
-        overview = await self.get_project_overview(project=project)
-        type_dist = await self.get_document_type_distribution(project=project)
-        temporal = await self.get_temporal_distribution(project=project)
+        # `deadline_secs` bounds one HTTP request. This tool issues seven in sequence, so
+        # without an outer budget one call could block for seven deadlines on a stdio
+        # server the host has exactly one connection to.
+        async with asyncio.timeout(self._settings.deadline_secs):
+            overview = await self.get_project_overview(project=project)
+            type_dist = await self.get_document_type_distribution(project=project)
+            temporal = await self.get_temporal_distribution(project=project)
 
-        path_analysis = await self._analyze_document_structure(project)
-        quality_assessment = await self._assess_data_quality(project, type_dist)
+            path_analysis = await self._analyze_document_structure(project)
+            quality_assessment = await self._assess_data_quality(project, type_dist)
         insights = self._generate_insights(temporal, quality_assessment, type_dist)
 
         summary = {

@@ -77,6 +77,14 @@ jobs:
         run: |
           cd dist
           printf '%s\n' "$DIGESTS" | sha256sum --check --strict -
+          # --check is an inclusion test: it walks the manifest, not the directory, and
+          # the publish step below uploads everything in dist/. An added artifact would
+          # therefore ship unverified — and adding is the cheaper tamper than modifying.
+          expected=$(printf '%s\n' "$DIGESTS" | grep -c .)
+          actual=$(find . -maxdepth 1 -type f | wc -l)
+          [ "$expected" -eq "$actual" ] || {
+            echo "dist/ holds $actual files, the build job produced $expected"; exit 1;
+          }
 
       - name: Publish to PyPI
         # id-token: write above means this step can mint the OIDC token PyPI exchanges
