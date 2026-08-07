@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -50,7 +50,8 @@ class DatashareClient:
     async def list_projects(self) -> list[dict[str, Any]]:
         resp = await self._http.get("/api/project/")
         raise_for_status(resp, context="list_projects")
-        return resp.json()
+        data: list[dict[str, Any]] = resp.json()
+        return data
 
     async def search(self, *, project: str, query: dict[str, Any]) -> dict[str, Any]:
         _validate_path_segment(project, field="project")
@@ -59,7 +60,8 @@ class DatashareClient:
             json=query,
         )
         raise_for_status(resp, context="search_documents")
-        return resp.json()
+        data: dict[str, Any] = resp.json()
+        return data
 
     async def get_document_metadata(
         self, *, project: str, doc_id: str, routing: str | None = None
@@ -69,7 +71,8 @@ class DatashareClient:
         params = {"routing": routing} if routing else None
         resp = await self._http.get(f"/api/{project}/documents/{doc_id}", params=params)
         raise_for_status(resp, context="get_document_metadata")
-        return resp.json()
+        data: dict[str, Any] = resp.json()
+        return data
 
     async def get_document_content(
         self,
@@ -128,18 +131,18 @@ class DatashareClient:
             params=params,
         )
         raise_for_status(resp, context="get_document_content", resource=resource)
-        return resp.json()
+        data: dict[str, Any] = resp.json()
+        return data
 
     async def get_mapping(self, *, project: str) -> dict[str, Any]:
         _validate_path_segment(project, field="project")
         resp = await self._http.get(f"/api/index/search/{project}/_mapping")
         raise_for_status(resp, context=f"datashare://index/{project}/mapping", resource=True)
-        return resp.json()
+        data: dict[str, Any] = resp.json()
+        return data
 
     async def get_project_summary(self, *, project: str, format: str = "json") -> dict[str, Any]:
         """Generate comprehensive project summary combining all analyses."""
-        from datetime import datetime
-
         _validate_path_segment(project, field="project")
 
         overview = await self.get_project_overview(project=project)
@@ -201,7 +204,7 @@ class DatashareClient:
             "totalUniqueTenders": len(tender_ids),
         }
 
-    async def _assess_data_quality(self, project: str, type_dist: dict) -> dict[str, Any]:
+    async def _assess_data_quality(self, project: str, type_dist: dict[str, Any]) -> dict[str, Any]:
         """Assess data quality based on document types."""
         total = type_dist.get("totalDocuments", 0)
         type_dist_list = type_dist.get("typeDistribution", [])
@@ -228,7 +231,12 @@ class DatashareClient:
             "extractionSuccessRate": "unknown",
         }
 
-    def _generate_insights(self, temporal: dict, quality: dict, type_dist: dict) -> list[dict]:
+    def _generate_insights(
+        self,
+        temporal: dict[str, Any],
+        quality: dict[str, Any],
+        type_dist: dict[str, Any],
+    ) -> list[dict[str, Any]]:
         """Generate automatic insights from analysis."""
         insights = []
 
@@ -286,7 +294,7 @@ class DatashareClient:
 
         return insights
 
-    def _render_markdown(self, summary: dict) -> str:
+    def _render_markdown(self, summary: dict[str, Any]) -> str:
         """Render summary as markdown with ASCII visualizations."""
         lines = []
 
@@ -306,8 +314,6 @@ class DatashareClient:
 
         date_range = overview["dateRange"]
         if date_range["min"] and date_range["max"]:
-            from datetime import datetime
-
             min_year = datetime.fromtimestamp(date_range["min"] / 1000, tz=UTC).year
             max_year = datetime.fromtimestamp(date_range["max"] / 1000, tz=UTC).year
             if min_year > 1900:
@@ -437,7 +443,7 @@ class DatashareClient:
             "Other": [],
         }
 
-        grouped = {}
+        grouped: dict[str, int] = {}
         for bucket in buckets:
             content_type = bucket["key"]
             count = bucket["doc_count"]
@@ -472,13 +478,12 @@ class DatashareClient:
             json=query,
         )
         raise_for_status(resp, context="_get_total_count")
-        result = resp.json()
-        return result.get("hits", {}).get("total", {}).get("value", 0)
+        result: dict[str, Any] = resp.json()
+        total: int = result.get("hits", {}).get("total", {}).get("value", 0)
+        return total
 
     async def get_temporal_distribution(self, *, project: str) -> dict[str, Any]:
         """Get document counts grouped by year with peak detection."""
-        from datetime import datetime
-
         _validate_path_segment(project, field="project")
 
         total_docs = await self._get_total_count(project)

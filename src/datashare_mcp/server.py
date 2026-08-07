@@ -172,6 +172,7 @@ def build_server(settings: Settings) -> tuple[FastMCP, DatashareClient]:
         get_document_content tool with offset/limit instead.
         """
         payload = await client.get_document_content(project=project, doc_id=doc_id, resource=True)
-        return payload.get("content", "")
+        content: str = payload.get("content", "")
+        return content
 
     return mcp, client

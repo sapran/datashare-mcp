@@ -54,8 +54,15 @@ dev = [
     "pytest-asyncio>=0.23",
     "respx>=0.21",
     "ruff>=0.6",
-    "ty",
+    "mypy>=1.11",
 ]
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+python_version = "3.12"
+packages = ["datashare_mcp"]
+strict = true
+mypy_path = "src"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
