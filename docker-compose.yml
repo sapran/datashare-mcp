@@ -25,9 +25,17 @@ services:
     # As on the Aleph stack. Also covers the case where Docker Desktop restarts and
     # leaves every container without a policy stopped — observed on this machine.
     restart: on-failure
-    # A cgroup ceiling on top of the 2 GB heap, so that when this VM runs out of memory
-    # the kernel kills the container that exceeded its own budget instead of an arbitrary
+    # A cgroup ceiling on top of the heap, so that when this VM runs out of memory the
+    # kernel kills the container that exceeded its own budget instead of an arbitrary
     # neighbour. Exit 137 on this container then means this container, legibly.
+    #
+    # The heap must leave room *inside* this ceiling for the JVM's off-heap use — Lucene
+    # mmap accounting, direct buffers, metaspace, thread stacks. A 2 GB heap under a 3 GB
+    # limit did not: the container sat at ~2.2 GB steady and was OOM-killed on every GC
+    # spike (observed: RestartCount 39, exit 137 in a loop). Raising the limit is not
+    # available — the sibling Aleph stack's ingest workers hold ~11 GB of this VM's
+    # 17.5 GB — so the heap comes down to fit the budget instead. This index is small
+    # (single-digit thousands of documents); 1 GB is ample.
     mem_limit: 3g
     ports:
       # Loopback only, as the sibling Aleph stack binds every published port. This
@@ -39,7 +47,7 @@ services:
       # index was created under these watermarks, and flood_stage=100% means Elasticsearch
       # will not go read-only until the disk is completely full — keep real headroom on
       # the host rather than relaxing anything here.
-      ES_JAVA_OPTS: "-Xms2g -Xmx2g"
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
       discovery.type: single-node
       cluster.name: datashare
       cluster.routing.allocation.disk.watermark.low: "90%"
@@ -47,6 +55,18 @@ services:
       cluster.routing.allocation.disk.watermark.flood_stage: "100%"
       xpack.security.enabled: "false"
       indices.id_field_data.enabled: "true"
+      # Defence in depth behind the MCP server's body guard (client.py `_scan_body`).
+      #
+      # NOT `script.allowed_types: none` — measured, not assumed: Datashare's ranged
+      # content endpoint issues an inline Painless substring, so refusing inline scripts
+      # outright breaks get_document_content with "all shards failed" (58 × "cannot
+      # execute [inline] scripts" in this node's log).
+      #
+      # Restricting the *context* keeps that working while still refusing the shapes a
+      # caller-supplied query would use: `field` is what Datashare's substring needs;
+      # `aggs` (scripted_metric) and `score` (script_score, function_score) are not
+      # granted, so those are refused by the node even if the client guard is bypassed.
+      script.allowed_contexts: "field"
     volumes:
       - es-data:/usr/share/elasticsearch/data
     healthcheck:
