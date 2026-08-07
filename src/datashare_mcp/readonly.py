@@ -11,6 +11,15 @@ import httpx
 # it. Extending this tuple is the only way to widen the surface; no tool argument,
 # caller value or redirect can.
 #
+# SCOPE — this is an in-client control. It bounds what *this process* sends, and nothing
+# else. It is not a boundary around the Datashare instance: in the shipped local stack,
+# Datashare runs in LOCAL mode and Elasticsearch with xpack.security.enabled=false, so any
+# other process on the host — including an agent that also holds a shell or a generic HTTP
+# tool — reaches 127.0.0.1:8888 and 127.0.0.1:9201 unauthenticated, with full read and
+# write access, and this allowlist never sees those requests. What the allowlist buys is
+# that a compromised or mistaken *caller of this server* cannot turn it into the write
+# path. See docs/local-environment.md, "Trust boundary".
+#
 # The threat is specific and was read from ICIJ/datashare at tag 21.2.1, in
 # datashare-app/src/main/java/org/icij/datashare/web/IndexResource.java and
 # datashare-app/src/main/java/org/icij/datashare/utils/IndexAccessVerifier.java:
@@ -58,7 +67,21 @@ import httpx
 # validator and this guard cannot disagree by construction. Excluding `/` is what keeps
 # /api/{project}/documents/{doc_id} from also swallowing
 # /api/{project}/documents/content/{doc_id}.
-_SEGMENT = r"[A-Za-z0-9._-]+"
+#
+# A segment must carry at least one non-dot character, which is what excludes the literal
+# `.` and `..`. Without that, two pairs below fullmatch `/api/../documents/d1` and the
+# guard would *authorise* a path escaping the /api namespace. Today httpx happens to
+# collapse dot segments inside build_request, before the event hook runs — but that is an
+# undocumented ordering property of a dependency pinned only as `httpx>=0.27,<1`, so it is
+# not something this guard may rely on. It also removes an observable confusion that does
+# not need a future httpx to bite: get_document_metadata(project="p", doc_id="..") built
+# /api/p/documents/.., which normalises to /api/p — a tool documented to return one
+# document's metadata returning something else entirely.
+#
+# Written as "any run containing one non-dot" rather than a `(?!\.+$)` lookahead because
+# _SEGMENT is interpolated into longer patterns, where `$` would anchor at the end of the
+# whole path instead of the end of the segment.
+_SEGMENT = r"[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*"
 
 _ALLOWED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (method, re.compile(rf"{path}/?"))
@@ -90,6 +113,21 @@ def is_read_only(method: str, path: str) -> bool:
     mutating handler on the identical path.
     """
     return any(m == method and p.fullmatch(path) for m, p in _ALLOWED)
+
+
+def _safe_target(request: httpx.Request) -> str:
+    """`METHOD scheme://host[:port]/path`, with any userinfo and query dropped.
+
+    `str(httpx.URL)` renders userinfo verbatim — only `__repr__` substitutes `[secure]` —
+    and httpx derives BasicAuth from URL userinfo, so a DATASHARE_URL of
+    `https://user:pass@host` is a working configuration whose password would otherwise be
+    interpolated into a refusal message and handed to the model. The query string is
+    dropped for the same reason: it is caller-influenced and adds nothing to a refusal.
+    """
+    url = request.url
+    port = "" if url.port is None else f":{url.port}"
+    path = url.raw_path.partition(b"?")[0].decode("ascii", "replace")
+    return f"{request.method} {url.scheme}://{url.host}{port}{path}"
 
 
 def read_only_hook(url: str) -> Callable[[httpx.Request], Awaitable[None]]:
@@ -126,7 +164,7 @@ def read_only_hook(url: str) -> Callable[[httpx.Request], Awaitable[None]]:
         origin = (request.url.scheme, request.url.host, request.url.port)
         if origin != expected_origin:
             raise ReadOnlyViolation(
-                f"blocked {request.method} {request.url}: this request leaves the "
+                f"blocked {_safe_target(request)}: this request leaves the "
                 f"configured Datashare host {base.scheme}://{base.host}"
                 f"{'' if base.port is None else f':{base.port}'}"
             )
@@ -138,12 +176,12 @@ def read_only_hook(url: str) -> Callable[[httpx.Request], Awaitable[None]]:
                 path = path[len(prefix) :]
             else:
                 raise ReadOnlyViolation(
-                    f"blocked {request.method} {request.url}: this request leaves the "
+                    f"blocked {_safe_target(request)}: this request leaves the "
                     f"configured Datashare base path {prefix}"
                 )
         if not is_read_only(request.method, path):
             raise ReadOnlyViolation(
-                f"blocked {request.method} {request.url}: datashare-mcp is read-only and "
+                f"blocked {_safe_target(request)}: datashare-mcp is read-only and "
                 "only calls a fixed allowlist of Datashare read endpoints"
             )
 

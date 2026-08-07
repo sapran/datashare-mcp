@@ -1,6 +1,10 @@
+import asyncio
+
 import httpx
 import pytest
 
+from datashare_mcp.client import DatashareClient
+from datashare_mcp.config import Settings
 from tests.shapes import (
     assert_content_payload,
     assert_project_list,
@@ -52,6 +56,113 @@ async def test_search_passes_through_body(client, respx_mock):
     assert body_seen == query
     assert_search_envelope(out, min_hits=1)
     assert out["hits"]["hits"][0]["_routing"] == "d1"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param({"script_fields": {"x": {"script": "1"}}}, id="script_fields"),
+        pytest.param({"runtime_mappings": {"x": {"type": "long"}}}, id="runtime_mappings"),
+        pytest.param(
+            {"query": {"bool": {"must": [{"script": {"script": "true"}}]}}},
+            id="script-nested-in-bool",
+        ),
+        pytest.param(
+            {"query": {"function_score": {"functions": [{"script_score": {}}]}}},
+            id="script_score-nested-in-list",
+        ),
+        pytest.param(
+            {"query": {"terms": {"id": {"index": "other", "id": "1", "path": "ids"}}}},
+            id="terms-lookup-reads-another-index",
+        ),
+        pytest.param(
+            {
+                "aggs": {
+                    "m": {
+                        "scripted_metric": {
+                            "init_script": "state.x = []",
+                            "map_script": "state.x.add(1)",
+                            "combine_script": "return state.x",
+                            "reduce_script": "return states",
+                        }
+                    }
+                }
+            },
+            id="scripted_metric-walked-through-the-old-four-key-denylist",
+        ),
+        pytest.param(
+            {"aggs": {"m": {"avg": {"script": {"source": "doc['n'].value"}}}}},
+            id="script-inside-a-metric-aggregation",
+        ),
+        pytest.param(
+            {"sort": [{"_script": {"type": "number", "script": "1"}}]},
+            id="_script-sort",
+        ),
+        pytest.param(
+            {"query": {"bool": {"filter": [{"script_score": {"script": {"id": "stored"}}}]}}},
+            id="stored-script-by-id",
+        ),
+    ],
+)
+async def test_search_refuses_dangerous_bodies(client, respx_mock, query):
+    """The path allowlist pins the URL; these escape it through the body instead.
+
+    The route must stay uncalled: refusal happens before the request is issued, so a
+    dangerous body never reaches Datashare's raw Elasticsearch proxy at all.
+    """
+    route = respx_mock.post("/api/index/search/leaks/_search").mock(
+        return_value=httpx.Response(200, json=search_payload())
+    )
+    with pytest.raises(ValueError, match="invalid query"):
+        await client.search(project="leaks", query=query)
+    assert not route.called
+
+
+async def test_search_allows_a_plain_terms_filter_and_terms_aggregation(client, respx_mock):
+    """The terms-lookup check must not swallow the ordinary uses of the same keyword."""
+    body_seen = {}
+
+    def handler(request):
+        import json
+
+        body_seen.update(json.loads(request.content))
+        return httpx.Response(200, json=search_payload())
+
+    respx_mock.post("/api/index/search/leaks/_search").mock(side_effect=handler)
+    query = {
+        "query": {"terms": {"tags": ["a", "b"]}},
+        "aggs": {"by_type": {"terms": {"field": "contentType", "size": 100}}},
+        "size": 0,
+    }
+    await client.search(project="leaks", query=query)
+    assert body_seen == query
+
+
+async def test_search_clamps_size_and_from(client, respx_mock, settings):
+    """An over-large page is a cost problem, so it is clamped, not refused."""
+    body_seen = {}
+
+    def handler(request):
+        import json
+
+        body_seen.update(json.loads(request.content))
+        return httpx.Response(200, json=search_payload())
+
+    respx_mock.post("/api/index/search/leaks/_search").mock(side_effect=handler)
+    query = {"query": {"match_all": {}}, "size": 10000, "from": 99999}
+    await client.search(project="leaks", query=query)
+    assert body_seen["size"] == settings.max_search_size
+    assert body_seen["from"] == settings.max_search_size
+    assert query["size"] == 10000, "the caller's dict must not be mutated"
+
+
+async def test_search_rejects_a_non_object_body(client, respx_mock):
+    route = respx_mock.post("/api/index/search/leaks/_search").mock(
+        return_value=httpx.Response(200, json=search_payload())
+    )
+    with pytest.raises(ValueError, match="must be an object"):
+        await client.search(project="leaks", query=["not", "a", "body"])
+    assert not route.called
 
 
 async def test_get_document_metadata(client, respx_mock):
@@ -287,3 +398,235 @@ async def test_get_project_summary_markdown(client, respx_mock):
     assert "# Project Summary" in out["markdown"]
     assert "ENGLISH" in out["markdown"]
     assert "2021" in out["markdown"]
+
+
+# -- bounded content fetches --------------------------------------------------
+
+
+async def test_full_content_fetch_is_capped_at_max_content_bytes(client, respx_mock, settings):
+    """`maxOffset` is a remote value derived from a document this server did not author.
+    It used to become the `limit` verbatim, so one call could ask for the whole text of
+    an arbitrarily large planted document and buffer it in this process."""
+    requested = []
+
+    def handler(request):
+        requested.append(int(request.url.params["limit"]))
+        huge = 50 * settings.max_content_bytes
+        if requested[-1] == 0:
+            return httpx.Response(200, json=content_payload(content="", max_offset=huge, limit=0))
+        return httpx.Response(
+            200,
+            json=content_payload(content="x" * requested[-1], max_offset=huge, limit=requested[-1]),
+        )
+
+    respx_mock.get("/api/leaks/documents/content/abc").mock(side_effect=handler)
+    out = await client.get_document_content(project="leaks", doc_id="abc")
+
+    assert requested == [0, settings.max_content_bytes]
+    assert out["truncated"] is True
+    assert len(out["content"]) == settings.max_content_bytes
+
+
+async def test_explicit_limit_is_capped_too(client, respx_mock, settings):
+    requested = []
+
+    def handler(request):
+        requested.append(int(request.url.params["limit"]))
+        return httpx.Response(200, json=content_payload(content="x" * requested[-1]))
+
+    respx_mock.get("/api/leaks/documents/content/abc").mock(side_effect=handler)
+    out = await client.get_document_content(
+        project="leaks", doc_id="abc", offset=0, limit=99_000_000
+    )
+    assert requested == [settings.max_content_bytes]
+    assert out["truncated"] is True
+
+
+async def test_small_document_is_returned_whole_and_unmarked(client, respx_mock):
+    """The cap must not change the ordinary case, nor add a truncation marker to it."""
+
+    def handler(request):
+        if int(request.url.params["limit"]) == 0:
+            return httpx.Response(200, json=content_payload(content="", max_offset=5, limit=0))
+        return httpx.Response(200, json=content_payload(content="hello", max_offset=5))
+
+    respx_mock.get("/api/leaks/documents/content/abc").mock(side_effect=handler)
+    out = await client.get_document_content(project="leaks", doc_id="abc")
+    assert_content_payload(out, whole_document=True)
+    assert "truncated" not in out
+
+
+@pytest.mark.parametrize("bad", ["not-a-number", None, True, {"n": 1}, [1]])
+async def test_unusable_max_offset_returns_the_probe_instead_of_raising(
+    client, respx_mock, bad
+):
+    """`probe.get("maxOffset", 0) or 0` kept any truthy non-integer, and the `<= 0`
+    comparison after it raised TypeError, which no tool handler caught."""
+    payload = content_payload(content="", limit=0)
+    payload["maxOffset"] = bad
+    respx_mock.get("/api/leaks/documents/content/abc").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    out = await client.get_document_content(project="leaks", doc_id="abc")
+    assert out["content"] == ""
+
+
+async def test_oversized_response_is_refused_before_it_is_decoded(client, respx_mock, settings):
+    """The request asks for at most the cap; nothing obliges the remote side to obey."""
+    oversized = "y" * (settings.max_content_bytes * 5)
+
+    def handler(request):
+        if int(request.url.params["limit"]) == 0:
+            return httpx.Response(
+                200, json=content_payload(content="", max_offset=len(oversized), limit=0)
+            )
+        return httpx.Response(200, json=content_payload(content=oversized))
+
+    respx_mock.get("/api/leaks/documents/content/abc").mock(side_effect=handler)
+    with pytest.raises(ValueError, match=r"exceeds the .* ceiling"):
+        await client.get_document_content(project="leaks", doc_id="abc")
+
+
+# -- corpus-derived values are not trusted arithmetic inputs ------------------
+
+
+async def test_markdown_summary_survives_an_absurd_creation_date(client, respx_mock):
+    """creationDate is extracted from the document file, so an out-of-range epoch reaches
+    fromtimestamp intact. Unwrapped it raised, permanently breaking the markdown summary
+    for that project — and the raise is not a ValueError in every case, so no tool handler
+    caught it."""
+    respx_mock.post("/api/index/search/leaks/_search").mock(
+        return_value=httpx.Response(
+            200,
+            json=search_payload(
+                hits=[],
+                total=100,
+                aggregations=language_buckets(("ENGLISH", 80))
+                | date_range_aggs(min_ms=10**20, max_ms=10**20)
+                | type_buckets(("application/pdf", 50))
+                | year_buckets((2021, 30)),
+            ),
+        )
+    )
+    respx_mock.get("/api/leaks/documents/content/abc").mock(
+        return_value=httpx.Response(200, json=content_payload(content="test"))
+    )
+
+    out = await client.get_project_summary(project="leaks", format="markdown")
+    assert "# Project Summary" in out["markdown"]
+    assert "Date Range:** unknown" in out["markdown"]
+
+
+async def test_temporal_distribution_survives_a_zero_total_with_buckets(client, respx_mock):
+    """The count and the histogram are separate requests, so they can disagree — an index
+    being written to is enough. Dividing by the count raised ZeroDivisionError, which is
+    not a ValueError and so escaped every tool handler."""
+    respx_mock.post("/api/index/search/leaks/_search").mock(
+        return_value=httpx.Response(
+            200,
+            json=search_payload(
+                hits=[],
+                total=0,
+                aggregations=year_buckets((2020, 1), (2021, 1), (2022, 90)),
+            ),
+        )
+    )
+    out = await client.get_temporal_distribution(project="leaks")
+    assert out["totalDocuments"] == 0
+    assert out["peaks"], "a spike is still reported, just without a percentage"
+    assert "% of corpus" not in out["peaks"][0]["note"]
+
+
+async def test_document_structure_survives_hits_without_source(client, respx_mock):
+    """`hit["_source"]` was a hard subscript, and `path` a document-supplied value: a hit
+    without _source raised KeyError, a non-string path raised TypeError."""
+    respx_mock.post("/api/index/search/leaks/_search").mock(
+        return_value=httpx.Response(
+            200,
+            json=search_payload(
+                hits=[
+                    {"_id": "a", "_routing": "a"},
+                    {"_id": "b", "_routing": "b", "_source": {"path": 12345}},
+                    {"_id": "c", "_routing": "c", "_source": {"path": "/media/docs/T-1/x.pdf"}},
+                ],
+                total=3,
+            ),
+        )
+    )
+    out = await client._analyze_document_structure("leaks")
+    assert out["totalUniqueTenders"] == 1
+    assert out["sampleTenderIds"] == ["T-1"]
+
+
+# -- every response is bounded, in bytes and in wall time ---------------------
+
+
+async def test_search_response_is_bounded_too(client, respx_mock, settings):
+    """The byte ceiling used to guard `get_document_content` alone. `size` is clamped to
+    200 hits, but per-hit `_source` length is third-party controlled, so hit count is not
+    a byte bound."""
+    ceiling = settings.max_content_bytes * 4 + 8192
+    respx_mock.post("/api/index/search/leaks/_search").mock(
+        return_value=httpx.Response(200, content=b"y" * (ceiling + 1))
+    )
+    with pytest.raises(ValueError, match=r"exceeds the .* ceiling"):
+        await client.search(project="leaks", query={"query": {"match_all": {}}})
+
+
+@pytest.mark.parametrize(
+    ("method", "kwargs"),
+    [
+        ("list_projects", {}),
+        ("get_mapping", {"project": "leaks"}),
+        ("get_document_metadata", {"project": "leaks", "doc_id": "abc"}),
+    ],
+)
+async def test_every_endpoint_is_bounded(client, respx_mock, settings, method, kwargs):
+    ceiling = settings.max_content_bytes * 4 + 8192
+    oversized = httpx.Response(200, content=b"z" * (ceiling + 1))
+    respx_mock.get("/api/project/").mock(return_value=oversized)
+    respx_mock.get("/api/index/search/leaks/_mapping").mock(return_value=oversized)
+    respx_mock.get("/api/leaks/documents/abc").mock(return_value=oversized)
+    with pytest.raises(ValueError, match=r"exceeds the .* ceiling"):
+        await getattr(client, method)(**kwargs)
+
+
+async def test_oversized_body_without_content_length_is_abandoned_mid_stream(
+    client, respx_mock, settings
+):
+    """A chunked response declares no length, so the pre-read check cannot see it. The
+    running counter must stop it before the whole body is materialised."""
+    ceiling = settings.max_content_bytes * 4 + 8192
+    chunk = b"q" * 65536
+    sent = {"n": 0}
+
+    async def chunks():
+        while True:
+            sent["n"] += 1
+            yield chunk
+
+    respx_mock.get("/api/project/").mock(return_value=httpx.Response(200, content=chunks()))
+    with pytest.raises(ValueError, match="mid-stream"):
+        await client.list_projects()
+    # Stopped near the ceiling rather than reading forever.
+    assert sent["n"] * len(chunk) < ceiling + 2 * len(chunk)
+
+
+async def test_slow_drip_response_hits_the_total_deadline(respx_mock, settings, monkeypatch):
+    """httpx's read timeout bounds the wait for the *next chunk*, so a response dripping
+    one byte well inside timeout_secs never trips it and streams forever."""
+    monkeypatch.setenv("DATASHARE_DEADLINE_SECS", "1")
+    slow_settings = Settings()
+    slow_client = DatashareClient(slow_settings)
+
+    async def drip():
+        for _ in range(1000):
+            await asyncio.sleep(0.05)
+            yield b" "
+
+    respx_mock.get("/api/project/").mock(return_value=httpx.Response(200, content=drip()))
+    try:
+        with pytest.raises(ValueError, match="did not finish responding within"):
+            await slow_client.list_projects()
+    finally:
+        await slow_client.aclose()

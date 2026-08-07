@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import re
+import ssl
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -22,6 +25,115 @@ def _validate_path_segment(value: str, *, field: str) -> str:
     return value
 
 
+# The path allowlist in readonly.py pins POST to the literal `_search` suffix, but it
+# never looks at the body, and Datashare's @Post("/search/:path:") javadoc says
+# "everything sent is forwarded to Elasticsearch". These are the body-side features that
+# escape the guarantee the path pin makes:
+#
+#   * Painless execution on the Elasticsearch node. Read-only in intent, arbitrary
+#     computation in fact.
+#   * a `terms` clause may carry a *lookup* — {"terms": {"f": {"index": "other-project",
+#     "id": "1", "path": "x"}}} — which reads a document out of an index this request's
+#     path never named, so Datashare's path-based grant check does not cover it.
+#
+# Scripting is matched by RULE, not by an enumerated list. An earlier version of this
+# guard listed four spellings — script, script_fields, script_score, runtime_mappings —
+# and a `scripted_metric` aggregation walked straight through it, because its Painless
+# lives under init_script / map_script / combine_script / reduce_script and the
+# aggregation name is not the literal `script`. Elasticsearch keeps adding script-bearing
+# constructs; a list of their names will keep losing to the next one. Every such key in
+# the DSL contains the substring "script", so that is what is matched.
+#
+# The cost is a false positive on a *corpus field* literally named "script"
+# ({"match": {"script": "..."}}). That is rare, and the refusal is explicit rather than
+# silent — the right way round for this trade.
+#
+# `runtime_mappings` is the one script-bearing construct whose name does not contain
+# "script", so it stays named.
+_SCRIPT_KEY = "script"
+_FORBIDDEN_BODY_KEYS = frozenset({"runtime_mappings"})
+# A terms lookup is exactly these keys; a plain terms filter is a list of values.
+_TERMS_LOOKUP_KEYS = frozenset({"index", "id", "path", "routing"})
+# Bounds the recursive scan. Deeper than this is not a query anyone writes by hand, and
+# an unbounded walk on caller-supplied JSON is its own denial of service.
+_MAX_BODY_DEPTH = 32
+
+
+def _scan_body(node: Any, *, depth: int = 0) -> None:
+    """Reject forbidden constructs anywhere in an Elasticsearch request body."""
+    if depth > _MAX_BODY_DEPTH:
+        raise ValueError(f"invalid query: nested deeper than {_MAX_BODY_DEPTH} levels")
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str) and (
+                _SCRIPT_KEY in key.lower() or key in _FORBIDDEN_BODY_KEYS
+            ):
+                raise ValueError(
+                    f"invalid query: {key!r} is not allowed — this server forwards only "
+                    "declarative read queries, not server-side scripting"
+                )
+            if key == "terms" and isinstance(value, dict):
+                for clause in value.values():
+                    if isinstance(clause, dict) and _TERMS_LOOKUP_KEYS & clause.keys():
+                        raise ValueError(
+                            "invalid query: a terms lookup reads from an index outside "
+                            "the project in the request path; pass literal values instead"
+                        )
+            _scan_body(value, depth=depth + 1)
+    elif isinstance(node, list):
+        for item in node:
+            _scan_body(item, depth=depth + 1)
+
+
+def _validate_search_body(query: Any, *, max_size: int) -> dict[str, Any]:
+    """Return a safe copy of an Elasticsearch request body, or raise ValueError.
+
+    `size` and `from` are clamped rather than refused: an over-large page is a cost
+    problem, not an authorization one, and clamping keeps the caller's query working.
+    """
+    if not isinstance(query, dict):
+        raise ValueError(f"invalid query: must be an object (got {type(query).__name__})")
+    _scan_body(query)
+    body = dict(query)
+    for field in ("size", "from"):
+        value = body.get(field)
+        if isinstance(value, bool) or not isinstance(value, int):
+            if value is not None:
+                raise ValueError(f"invalid query: {field!r} must be an integer")
+            continue
+        if value < 0:
+            raise ValueError(f"invalid query: {field!r} must not be negative")
+        body[field] = min(value, max_size)
+    return body
+
+
+def _coerce_max_offset(raw: Any) -> int:
+    """The remote `maxOffset`, as a non-negative int, or 0 when it is not usable.
+
+    This value comes off the wire and then becomes a request parameter, so it is not
+    assumed to be an int. `probe.get("maxOffset", 0) or 0` preserved any truthy
+    non-integer, and the `<= 0` comparison that followed raised TypeError on a str.
+    """
+    if isinstance(raw, bool) or raw is None:
+        return 0
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return max(value, 0)
+
+
+def _response_ceiling(max_content_bytes: int) -> int:
+    """Byte ceiling for a content response carrying `max_content_bytes` of text.
+
+    The cap counts characters of extracted text; the body is JSON, where UTF-8 encoding
+    and escaping both expand it, plus the four other keys of the envelope. 4x + 8 KiB is
+    the slack that buys — loose enough never to refuse an honest response, tight enough
+    that an unbounded one still hits it.
+    """
+    return max_content_bytes * 4 + 8192
+
+
 class DatashareClient:
     """Async wrapper around the datashare REST API.
 
@@ -38,31 +150,99 @@ class DatashareClient:
         self._http = httpx.AsyncClient(
             base_url=settings.url,
             headers={
-                "Authorization": f"Bearer {settings.api_key}",
+                "Authorization": f"Bearer {settings.api_key.get_secret_value()}",
                 "X-DS-CSRF-TOKEN": csrf_token,
             },
             cookies={"_ds_csrf_token": csrf_token},
             event_hooks={"request": [read_only_hook(settings.url)]},
             timeout=settings.timeout_secs,
-            verify=settings.verify_tls,
+            # A CA bundle, when supplied, becomes the verification root — so a self-signed
+            # or private-CA instance is trusted by evidence rather than by turning
+            # verification off for every request that carries the bearer key. Built as an
+            # explicit context because httpx deprecates `verify=<path string>`.
+            verify=(
+                ssl.create_default_context(cafile=settings.ca_bundle)
+                if settings.ca_bundle
+                else settings.verify_tls
+            ),
         )
 
     async def aclose(self) -> None:
         await self._http.aclose()
 
+    async def _fetch_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        context: str,
+        resource: bool = False,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> Any:
+        """Issue one request and decode its JSON, bounded in bytes and in wall time.
+
+        Every Datashare call goes through here, which is the point: the byte ceiling used
+        to live in `get_document_content` alone, and every endpoint added since — search,
+        mapping, projects, the analysis helpers — silently did without it. A single choke
+        point cannot be forgotten by the next endpoint.
+
+        Streamed with a running counter, so an oversized body is abandoned mid-flight
+        rather than materialised and then measured. `timeout_secs` is per-operation —
+        httpx's read timeout bounds the wait for the *next chunk*, so a response dripping
+        one byte every 29 seconds never trips it — hence the separate total deadline.
+        """
+        ceiling = _response_ceiling(self._settings.max_content_bytes)
+        chunks: list[bytes] = []
+        total = 0
+        try:
+            async with asyncio.timeout(self._settings.deadline_secs):
+                async with self._http.stream(
+                    method, url, params=params, json=json_body
+                ) as resp:
+                    declared = resp.headers.get("content-length")
+                    if declared is not None and declared.isdigit() and int(declared) > ceiling:
+                        raise ValueError(
+                            f"{context}: response of {declared} bytes exceeds the "
+                            f"{ceiling}-byte ceiling; request a smaller range"
+                        )
+                    async for chunk in resp.aiter_bytes():
+                        total += len(chunk)
+                        if total > ceiling:
+                            raise ValueError(
+                                f"{context}: response exceeded the {ceiling}-byte ceiling "
+                                "mid-stream; request a smaller range"
+                            )
+                        chunks.append(chunk)
+                    body = b"".join(chunks).decode("utf-8", "replace")
+                    raise_for_status(resp, context=context, resource=resource, body=body)
+        except TimeoutError as e:
+            raise ValueError(
+                f"{context}: the Datashare instance did not finish responding within "
+                f"{self._settings.deadline_secs}s"
+            ) from e
+        try:
+            return json.loads(body)
+        except ValueError as e:
+            raise ValueError(f"{context}: Datashare returned a body that is not JSON") from e
+
     async def list_projects(self) -> list[dict[str, Any]]:
-        resp = await self._http.get("/api/project/")
-        raise_for_status(resp, context="list_projects")
-        return cast(list[dict[str, Any]], resp.json())
+        return cast(
+            list[dict[str, Any]], await self._fetch_json("GET", "/api/project/", context="list_projects")
+        )
 
     async def search(self, *, project: str, query: dict[str, Any]) -> dict[str, Any]:
         _validate_path_segment(project, field="project")
-        resp = await self._http.post(
-            f"/api/index/search/{project}/_search",
-            json=query,
+        body = _validate_search_body(query, max_size=self._settings.max_search_size)
+        return cast(
+            dict[str, Any],
+            await self._fetch_json(
+                "POST",
+                f"/api/index/search/{project}/_search",
+                context="search_documents",
+                json_body=body,
+            ),
         )
-        raise_for_status(resp, context="search_documents")
-        return cast(dict[str, Any], resp.json())
 
     async def get_document_metadata(
         self, *, project: str, doc_id: str, routing: str | None = None
@@ -70,9 +250,15 @@ class DatashareClient:
         _validate_path_segment(project, field="project")
         _validate_path_segment(doc_id, field="doc_id")
         params = {"routing": routing} if routing else None
-        resp = await self._http.get(f"/api/{project}/documents/{doc_id}", params=params)
-        raise_for_status(resp, context="get_document_metadata")
-        return cast(dict[str, Any], resp.json())
+        return cast(
+            dict[str, Any],
+            await self._fetch_json(
+                "GET",
+                f"/api/{project}/documents/{doc_id}",
+                context="get_document_metadata",
+                params=params,
+            ),
+        )
 
     async def get_document_content(
         self,
@@ -89,27 +275,35 @@ class DatashareClient:
         _validate_path_segment(doc_id, field="doc_id")
         if (offset is None) != (limit is None):
             raise ValueError("offset and limit must be supplied together (or both omitted)")
+        cap = self._settings.max_content_bytes
         if offset is None and limit is None:
             # Full content. Datashare's no-range endpoint reads the whole text from
             # the relational DB, which is empty for index-only documents (CLI SCAN/INDEX
             # populates Elasticsearch, not the DB) and returns HTTP 500. Use the
             # Elasticsearch-backed ranged path instead: probe with limit=0 (a no-op
             # substring(0,0) that still reports `maxOffset`) to learn the length, then
-            # fetch the whole range in one call.
+            # fetch the range in one call — bounded by `cap`, because `maxOffset` is a
+            # remote value derived from a document whose text this server did not author.
             probe = await self._get_content_range(
                 project, doc_id, routing, 0, 0, target_language, resource
             )
-            max_offset = probe.get("maxOffset", 0) or 0
+            max_offset = _coerce_max_offset(probe.get("maxOffset"))
             if max_offset <= 0:
                 return probe
-            return await self._get_content_range(
-                project, doc_id, routing, 0, max_offset, target_language, resource
+            payload = await self._get_content_range(
+                project, doc_id, routing, 0, min(max_offset, cap), target_language, resource
             )
+            if max_offset > cap:
+                payload["truncated"] = True
+            return payload
         # Both supplied (the half-supplied and both-omitted cases returned above).
         assert offset is not None and limit is not None
-        return await self._get_content_range(
-            project, doc_id, routing, offset, limit, target_language, resource
+        payload = await self._get_content_range(
+            project, doc_id, routing, offset, min(limit, cap), target_language, resource
         )
+        if limit > cap:
+            payload["truncated"] = True
+        return payload
 
     async def _get_content_range(
         self,
@@ -126,18 +320,28 @@ class DatashareClient:
             params["routing"] = routing
         if target_language is not None:
             params["targetLanguage"] = target_language
-        resp = await self._http.get(
-            f"/api/{project}/documents/content/{doc_id}",
-            params=params,
+        return cast(
+            dict[str, Any],
+            await self._fetch_json(
+                "GET",
+                f"/api/{project}/documents/content/{doc_id}",
+                context="get_document_content",
+                resource=resource,
+                params=params,
+            ),
         )
-        raise_for_status(resp, context="get_document_content", resource=resource)
-        return cast(dict[str, Any], resp.json())
 
     async def get_mapping(self, *, project: str) -> dict[str, Any]:
         _validate_path_segment(project, field="project")
-        resp = await self._http.get(f"/api/index/search/{project}/_mapping")
-        raise_for_status(resp, context=f"datashare://index/{project}/mapping", resource=True)
-        return cast(dict[str, Any], resp.json())
+        return cast(
+            dict[str, Any],
+            await self._fetch_json(
+                "GET",
+                f"/api/index/search/{project}/_mapping",
+                context=f"datashare://index/{project}/mapping",
+                resource=True,
+            ),
+        )
 
     async def get_project_summary(self, *, project: str, format: str = "json") -> dict[str, Any]:
         """Generate comprehensive project summary combining all analyses."""
@@ -178,19 +382,26 @@ class DatashareClient:
         """Analyze document path patterns."""
         query = {"size": 50, "query": {"match_all": {}}, "_source": ["path", "dirname"]}
 
-        resp = await self._http.post(
+        result = await self._fetch_json(
+            "POST",
             f"/api/index/search/{project}/_search",
-            json=query,
+            context="_analyze_document_structure",
+            json_body=query,
         )
-        raise_for_status(resp, context="_analyze_document_structure")
-        result = resp.json()
 
-        paths = [hit["_source"].get("path", "") for hit in result.get("hits", {}).get("hits", [])]
+        # `_source` is absent from a hit when the query asked for none, and `path` is a
+        # value extracted from the document, so neither its presence nor its type is this
+        # server's to assume. A KeyError or TypeError here is not a ValueError and would
+        # escape the tool handlers.
+        paths = [
+            hit.get("_source", {}).get("path", "")
+            for hit in result.get("hits", {}).get("hits", [])
+        ]
 
         tender_pattern = "/media/docs/"
         tender_ids = set()
         for path in paths:
-            if tender_pattern in path:
+            if isinstance(path, str) and tender_pattern in path:
                 idx = path.find(tender_pattern) + len(tender_pattern)
                 tender_id = path[idx:].split("/")[0]
                 if tender_id:
@@ -312,12 +523,20 @@ class DatashareClient:
 
         date_range = overview["dateRange"]
         if date_range["min"] and date_range["max"]:
-            min_year = datetime.fromtimestamp(date_range["min"] / 1000, tz=UTC).year
-            max_year = datetime.fromtimestamp(date_range["max"] / 1000, tz=UTC).year
-            if min_year > 1900:
-                lines.append(f"- **Date Range:** {min_year} - {max_year}")
+            # creationDate is read out of the document file, so an absurd epoch reaches
+            # here intact and makes fromtimestamp raise. The identical call in
+            # _get_temporal_distribution is already wrapped; this one was missed, and an
+            # unwrapped raise breaks the markdown summary permanently for that project.
+            try:
+                min_year = datetime.fromtimestamp(date_range["min"] / 1000, tz=UTC).year
+                max_year = datetime.fromtimestamp(date_range["max"] / 1000, tz=UTC).year
+            except (TypeError, ValueError, OSError, OverflowError):
+                lines.append("- **Date Range:** unknown")
             else:
-                lines.append(f"- **Date Range:** unknown - {max_year}")
+                if min_year > 1900:
+                    lines.append(f"- **Date Range:** {min_year} - {max_year}")
+                else:
+                    lines.append(f"- **Date Range:** unknown - {max_year}")
         lines.append("")
 
         lines.append("## Document Types")
@@ -366,12 +585,12 @@ class DatashareClient:
             },
         }
 
-        resp = await self._http.post(
+        result = await self._fetch_json(
+            "POST",
             f"/api/index/search/{project}/_search",
-            json=query,
+            context="get_project_overview",
+            json_body=query,
         )
-        raise_for_status(resp, context="get_project_overview")
-        result = resp.json()
 
         aggs = result.get("aggregations", {})
         hits = result.get("hits", {})
@@ -396,12 +615,12 @@ class DatashareClient:
 
         query = {"size": 0, "aggs": {"by_type": {"terms": {"field": "contentType", "size": 100}}}}
 
-        resp = await self._http.post(
+        result = await self._fetch_json(
+            "POST",
             f"/api/index/search/{project}/_search",
-            json=query,
+            context="get_document_type_distribution",
+            json_body=query,
         )
-        raise_for_status(resp, context="get_document_type_distribution")
-        result = resp.json()
 
         aggs = result.get("aggregations", {})
         buckets = aggs.get("by_type", {}).get("buckets", [])
@@ -471,12 +690,15 @@ class DatashareClient:
     async def _get_total_count(self, project: str) -> int:
         """Get total document count for a project."""
         query = {"size": 0}
-        resp = await self._http.post(
-            f"/api/index/search/{project}/_search",
-            json=query,
+        result = cast(
+            dict[str, Any],
+            await self._fetch_json(
+                "POST",
+                f"/api/index/search/{project}/_search",
+                context="_get_total_count",
+                json_body=query,
+            ),
         )
-        raise_for_status(resp, context="_get_total_count")
-        result = cast(dict[str, Any], resp.json())
         return cast(int, result.get("hits", {}).get("total", {}).get("value", 0))
 
     async def get_temporal_distribution(self, *, project: str) -> dict[str, Any]:
@@ -499,12 +721,12 @@ class DatashareClient:
             },
         }
 
-        resp = await self._http.post(
+        result = await self._fetch_json(
+            "POST",
             f"/api/index/search/{project}/_search",
-            json=query,
+            context="get_temporal_distribution",
+            json_body=query,
         )
-        raise_for_status(resp, context="get_temporal_distribution")
-        result = resp.json()
 
         aggs = result.get("aggregations", {})
         buckets = aggs.get("by_year", {}).get("buckets", [])
@@ -516,7 +738,7 @@ class DatashareClient:
                 try:
                     year = datetime.fromtimestamp(epoch_ms / 1000, tz=UTC).year
                     yearly_data.append({"year": year, "count": bucket["doc_count"]})
-                except (ValueError, OSError):
+                except (TypeError, ValueError, OSError, OverflowError, KeyError):
                     pass
 
         yearly_data.sort(key=lambda x: x["year"])
@@ -531,7 +753,14 @@ class DatashareClient:
                     {
                         "year": entry["year"],
                         "count": entry["count"],
-                        "note": f"Significant spike: {entry['count']} docs ({round(entry['count'] / total_docs * 100, 1)}% of corpus)",
+                        "note": (
+                            f"Significant spike: {entry['count']} docs"
+                            + (
+                                f" ({round(entry['count'] / total_docs * 100, 1)}% of corpus)"
+                                if total_docs > 0
+                                else ""
+                            )
+                        ),
                     }
                 )
 
