@@ -27,7 +27,12 @@ the code.
 - [x] 1.7 Confirm `_SAFE_PATH_SEGMENT` is anchored `^[A-Za-z0-9._-]+$` and is applied to
       every `project` and `doc_id` before a URL is built.
       *Every public method that takes a path segment validates it; the three private
-      helpers that build URLs are reachable only through a validating public method.*
+      helpers that build URLs are reachable only through a validating public method.
+      Corrected in review: `^...$` with `re.match` was NOT a full-length match — Python's
+      `$` also matches before a trailing newline, so `tenderchad\n` was accepted. The
+      validator is now compiled from `readonly._SEGMENT` and applied with `fullmatch`, and
+      the requirement in `openspec/specs/mcp-tool-surface/spec.md` says "over its entire
+      length" rather than naming an anchored pattern.*
 
 ## 2. Confirm the mocked suite already covers the baseline
 

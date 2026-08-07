@@ -3,6 +3,7 @@ import pytest
 from fastmcp import Client as MCPClient
 
 from datashare_mcp.server import build_server
+from tests.shapes import content_payload, project_list
 
 pytestmark = pytest.mark.asyncio
 
@@ -27,7 +28,7 @@ async def test_document_resource(settings, respx_mock):
     respx_mock.get("/api/leaks/documents/content/abc").mock(
         return_value=httpx.Response(
             200,
-            json={"content": "Body text here", "maxOffset": 14, "start": 0, "size": 14},
+            json=content_payload(content="Body text here"),
         )
     )
     server, ds_client = build_server(settings)
@@ -55,7 +56,9 @@ async def test_document_resource_404_raises_resource_error(settings, respx_mock)
 
 
 async def test_projects_resource(settings, respx_mock):
-    respx_mock.get("/api/project/").mock(return_value=httpx.Response(200, json=[{"name": "leaks"}]))
+    respx_mock.get("/api/project/").mock(
+        return_value=httpx.Response(200, json=project_list("leaks"))
+    )
     server, ds_client = build_server(settings)
     try:
         async with MCPClient(server) as mcp_client:

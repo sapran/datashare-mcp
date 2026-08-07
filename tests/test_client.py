@@ -6,9 +6,13 @@ from tests.shapes import (
     assert_project_list,
     assert_search_envelope,
     content_payload,
+    date_range_aggs,
     document_metadata,
+    language_buckets,
     project_list,
     search_payload,
+    type_buckets,
+    year_buckets,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -173,19 +177,12 @@ async def test_get_project_overview(client, respx_mock):
     respx_mock.post("/api/index/search/leaks/_search").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "hits": {"total": {"value": 100}, "hits": []},
-                "aggregations": {
-                    "by_language": {
-                        "buckets": [
-                            {"key": "ENGLISH", "doc_count": 80},
-                            {"key": "RUSSIAN", "doc_count": 20},
-                        ]
-                    },
-                    "min_date": {"value": 1000000},
-                    "max_date": {"value": 2000000},
-                },
-            },
+            json=search_payload(
+                hits=[],
+                total=100,
+                aggregations=language_buckets(("ENGLISH", 80), ("RUSSIAN", 20))
+                | date_range_aggs(min_ms=1000000, max_ms=2000000),
+            ),
         )
     )
     out = await client.get_project_overview(project="leaks")
@@ -202,23 +199,21 @@ async def test_get_document_type_distribution(client, respx_mock):
         if "aggs" in body and "by_type" in body["aggs"]:
             return httpx.Response(
                 200,
-                json={
-                    "hits": {"total": {"value": 100}, "hits": []},
-                    "aggregations": {
-                        "by_type": {
-                            "buckets": [
-                                {"key": "application/pdf", "doc_count": 50},
-                                {"key": "application/msword", "doc_count": 30},
-                                {
-                                    "key": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    "doc_count": 20,
-                                },
-                            ]
-                        }
-                    },
-                },
+                json=search_payload(
+                    hits=[],
+                    total=100,
+                    aggregations=type_buckets(
+                        ("application/pdf", 50),
+                        ("application/msword", 30),
+                        (
+                            "application/vnd.openxmlformats-officedocument."
+                            "wordprocessingml.document",
+                            20,
+                        ),
+                    ),
+                ),
             )
-        return httpx.Response(200, json={"hits": {"total": {"value": 100}, "hits": []}})
+        return httpx.Response(200, json=search_payload(hits=[], total=100))
 
     respx_mock.post("/api/index/search/leaks/_search").mock(side_effect=handler)
     out = await client.get_document_type_distribution(project="leaks")
@@ -233,25 +228,9 @@ async def test_get_temporal_distribution(client, respx_mock):
     respx_mock.post("/api/index/search/leaks/_search").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "hits": {"total": {"value": 100}, "hits": []},
-                "aggregations": {
-                    "by_year": {
-                        "buckets": [
-                            {
-                                "key": 1609459200000,
-                                "key_as_string": "yyyy1609459200000",
-                                "doc_count": 30,
-                            },
-                            {
-                                "key": 1640995200000,
-                                "key_as_string": "yyyy1640995200000",
-                                "doc_count": 70,
-                            },
-                        ]
-                    }
-                },
-            },
+            json=search_payload(
+                hits=[], total=100, aggregations=year_buckets((2021, 30), (2022, 70))
+            ),
         )
     )
     out = await client.get_temporal_distribution(project="leaks")
@@ -266,32 +245,19 @@ async def test_get_project_summary_json(client, respx_mock):
     respx_mock.post("/api/index/search/leaks/_search").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "hits": {"total": {"value": 100}, "hits": []},
-                "aggregations": {
-                    "by_language": {"buckets": [{"key": "ENGLISH", "doc_count": 80}]},
-                    "min_date": {"value": 1000000},
-                    "max_date": {"value": 2000000},
-                    "by_type": {"buckets": [{"key": "application/pdf", "doc_count": 50}]},
-                    "by_year": {
-                        "buckets": [
-                            {
-                                "key": 1609459200000,
-                                "key_as_string": "yyyy1609459200000",
-                                "doc_count": 30,
-                            }
-                        ]
-                    },
-                },
-            },
+            json=search_payload(
+                hits=[],
+                total=100,
+                aggregations=language_buckets(("ENGLISH", 80))
+                | date_range_aggs(min_ms=1000000, max_ms=2000000)
+                | type_buckets(("application/pdf", 50))
+                | year_buckets((2021, 30)),
+            ),
         )
     )
     respx_mock.get("/api/leaks/documents/content/abc").mock(
-        return_value=httpx.Response(
-            200, json={"content": "test", "maxOffset": 4, "offset": 0, "limit": 0}
-        )
+        return_value=httpx.Response(200, json=content_payload(content="test"))
     )
-
     out = await client.get_project_summary(project="leaks", format="json")
     assert "metadata" in out
     assert "overview" in out
@@ -302,35 +268,18 @@ async def test_get_project_summary_markdown(client, respx_mock):
     respx_mock.post("/api/index/search/leaks/_search").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "hits": {"total": {"value": 100}, "hits": []},
-                "aggregations": {
-                    "by_language": {"buckets": [{"key": "ENGLISH", "doc_count": 80}]},
-                    "min_date": {"value": 1609459200000},
-                    "max_date": {"value": 1640995200000},
-                    "by_type": {"buckets": [{"key": "application/pdf", "doc_count": 50}]},
-                    "by_year": {
-                        "buckets": [
-                            {
-                                "key": 1609459200000,
-                                "key_as_string": "yyyy1609459200000",
-                                "doc_count": 30,
-                            },
-                            {
-                                "key": 1640995200000,
-                                "key_as_string": "yyyy1640995200000",
-                                "doc_count": 70,
-                            },
-                        ]
-                    },
-                },
-            },
+            json=search_payload(
+                hits=[],
+                total=100,
+                aggregations=language_buckets(("ENGLISH", 80))
+                | date_range_aggs(min_ms=1609459200000, max_ms=1640995200000)
+                | type_buckets(("application/pdf", 50))
+                | year_buckets((2021, 30), (2022, 70)),
+            ),
         )
     )
     respx_mock.get("/api/leaks/documents/content/abc").mock(
-        return_value=httpx.Response(
-            200, json={"content": "test", "maxOffset": 4, "offset": 0, "limit": 0}
-        )
+        return_value=httpx.Response(200, json=content_payload(content="test"))
     )
 
     out = await client.get_project_summary(project="leaks", format="markdown")

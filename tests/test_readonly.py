@@ -43,8 +43,12 @@ def test_document_id_charset_is_accepted_in_full() -> None:
         ("POST", "/api/index/tenderchad/_open"),
         ("PUT", "/api/index/_snapshot/backup"),
         ("DELETE", "/api/index/_snapshot/backup"),
+        ("PUT", "/api/index/_snapshot/backup/snap1"),
         ("DELETE", "/api/index/_snapshot/backup/snap1"),
         ("POST", "/api/index/_snapshot/backup/snap1/_restore"),
+        ("HEAD", "/api/index/search/tenderchad/_search"),
+        ("OPTIONS", "/api/index/tenderchad"),
+        ("OPTIONS", "/api/index/search/tenderchad/_search"),
         # Elasticsearch writes through the search proxy.
         ("POST", "/api/index/search/tenderchad/_delete_by_query"),
         ("POST", "/api/index/search/tenderchad/_update_by_query"),
@@ -52,10 +56,14 @@ def test_document_id_charset_is_accepted_in_full() -> None:
         # GET is forwarded to any ES path by Datashare, so the path pin does the work.
         ("GET", "/api/index/search/tenderchad/_cluster/settings"),
         ("GET", "/api/index/search/tenderchad/_settings"),
+        ("GET", "/api/index/search/_search/scroll"),
+        ("POST", "/api/index/search/_search/scroll"),
         # Document and project writes.
         ("DELETE", "/api/tenderchad/documents/d1"),
         ("POST", "/api/project/"),
         ("DELETE", "/api/project/tenderchad"),
+        ("PUT", "/api/tenderchad/documents/tags/d1"),
+        ("POST", "/api/tenderchad/documents/batchUpdate/star"),
     ],
 )
 def test_write_requests_are_blocked(method: str, path: str) -> None:
@@ -63,9 +71,12 @@ def test_write_requests_are_blocked(method: str, path: str) -> None:
 
 
 def test_method_alone_refuses_an_allowlisted_path() -> None:
-    """`/api/{project}/documents/{doc_id}` is allowlisted for GET and is a live DELETE
-    route upstream on the identical path. Only the missing (DELETE, ...) pair refuses it,
-    so this fails the moment someone drops the method from a pair."""
+    """`/api/{project}/documents/{doc_id}` is allowlisted for GET. Upstream registers no
+    mutating handler on that exact path today, but its namespace carries several
+    (`documents/tags/:docId`, `documents/untag/:docId`, `documents/batchUpdate/*` in
+    DocumentResource.java at 21.2.1). The method pin is what keeps a mutating verb refused
+    if one is ever added on the identical path, so this fails the moment someone drops the
+    method from a pair."""
     path = "/api/tenderchad/documents/d1"
     assert is_read_only("GET", path)
     for method in ("DELETE", "POST", "PUT", "PATCH"):
@@ -203,6 +214,10 @@ async def test_empty_path_is_normalised_to_root() -> None:
 
 
 # -- encoding -----------------------------------------------------------------
+#
+# The guard matches `raw_path` — the bytes httpx sends — not the percent-decoded
+# `request.url.path`. Matching the decoded form authorises one string and sends another,
+# because httpx's quote() preserves pre-existing %xx escapes on the wire.
 
 
 @pytest.mark.parametrize(
@@ -219,11 +234,71 @@ async def test_encoded_traversal_cannot_reach_a_write(path: str) -> None:
         await hook(httpx.Request("GET", f"http://datashare.test{path}"))
 
 
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        # Decodes to `/api/../documents/d1`, which fullmatches the document rule. The
+        # wire carries the encoded form, which does not.
+        ("GET", "/api/%2e%2e/documents/d1"),
+        # Decodes to `.../_search`; the wire carries `_sea%72ch`.
+        ("POST", "/api/index/search/tenderchad/_sea%72ch"),
+        # Every character of an allowlisted path, re-encoded.
+        ("GET", "/api/%70roject"),
+        ("GET", "/api/index/search/tenderchad/%5Fmapping"),
+    ],
+)
+async def test_percent_encoded_path_is_refused_even_when_it_decodes_to_an_allowed_one(
+    method: str, path: str
+) -> None:
+    """The guard must authorise the string that is actually sent.
+
+    This is the regression test for matching `request.url.path`: each of these decodes to
+    something the allowlist accepts while the wire target does not, so a decoded-path
+    guard lets them through.
+    """
+    request = httpx.Request(method, f"http://datashare.test{path}")
+    assert request.url.raw_path.decode() != request.url.path, "test case does not diverge"
+    hook = read_only_hook("http://datashare.test")
+    with pytest.raises(ReadOnlyViolation, match="read-only"):
+        await hook(request)
+
+
 def test_segment_charset_excludes_percent() -> None:
-    """Tripwire for matching the decoded `request.url.path`. Decoding can only add
-    separators, which makes `fullmatch` stricter — but only while `%` cannot appear
-    inside a segment. If `%` is ever admitted, the guard must move to `raw_path`."""
+    """`_SEGMENT` must not admit `%`, so a legitimate path this client builds is always
+    identical raw and decoded — which is what makes matching `raw_path` free of false
+    refusals. `client._validate_path_segment` enforces the same charset on caller input."""
     assert "%" not in _SEGMENT
+
+
+@pytest.mark.parametrize(
+    ("scheme", "host", "port"),
+    [
+        ("http", "datashare.test", 9201),  # Elasticsearch on the same machine
+        ("http", "evil.example", None),
+        ("https", "datashare.test", None),  # not a downgrade, but a different origin
+    ],
+)
+async def test_origin_pin_covers_scheme_and_port(scheme: str, host: str, port: int | None) -> None:
+    """Host alone is not the origin. In the documented local topology port 9201 is the
+    Elasticsearch container, a different trust domain, and this client attaches the bearer
+    key to every request it sends."""
+    hook = read_only_hook("http://datashare.test")
+    netloc = host if port is None else f"{host}:{port}"
+    with pytest.raises(ReadOnlyViolation, match="configured Datashare host"):
+        await hook(httpx.Request("GET", f"{scheme}://{netloc}/api/project/"))
+
+
+async def test_https_downgrade_to_http_is_refused() -> None:
+    hook = read_only_hook("https://ds.example.org")
+    with pytest.raises(ReadOnlyViolation, match="configured Datashare host"):
+        await hook(httpx.Request("GET", "http://ds.example.org/api/project/"))
+
+
+async def test_explicit_default_port_still_matches() -> None:
+    """httpx normalises the default port to None on both operands, so configuring
+    `http://datashare.test:80` must not refuse every request."""
+    hook = read_only_hook("http://datashare.test:80")
+    await hook(httpx.Request("GET", "http://datashare.test/api/project/"))
 
 
 # -- allowlist shape ----------------------------------------------------------
@@ -237,3 +312,21 @@ def test_allowlist_carries_no_mutating_verb() -> None:
     posts = [pattern.pattern for method, pattern in _ALLOWED if method == "POST"]
     assert posts == [rf"/api/index/search/{_SEGMENT}/_search/?"]
     assert len(_ALLOWED) == 5
+
+
+def test_validator_is_built_from_the_guard_charset() -> None:
+    """readonly.py claims the input validator and the guard cannot disagree. They cannot,
+    because client.py compiles its validator from `_SEGMENT` rather than restating it."""
+    from datashare_mcp.client import _SAFE_PATH_SEGMENT
+
+    assert _SAFE_PATH_SEGMENT.pattern == _SEGMENT
+
+
+@pytest.mark.parametrize("value", ["tenderchad\n", "\ntenderchad", "tender chad", "a/b", "a%2Fb"])
+def test_validator_rejects_whitespace_and_separators(value: str) -> None:
+    """`re.match` with `^...$` would accept a trailing newline — Python's `$` matches
+    before one. The validator uses `fullmatch`, so it does not."""
+    from datashare_mcp.client import _validate_path_segment
+
+    with pytest.raises(ValueError, match="invalid project"):
+        _validate_path_segment(value, field="project")

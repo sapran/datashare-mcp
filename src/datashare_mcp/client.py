@@ -2,20 +2,23 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from .config import Settings
 from .errors import raise_for_status
-from .readonly import read_only_hook
+from .readonly import _SEGMENT, read_only_hook
 
-_SAFE_PATH_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
+# Built from the guard's own charset, not a second copy of it: the input validator and
+# readonly.py cannot drift apart. `fullmatch`, not `match` with `^...$` — Python's `$`
+# also matches immediately before a trailing newline, which would admit "tenderchad\n".
+_SAFE_PATH_SEGMENT = re.compile(_SEGMENT)
 
 
 def _validate_path_segment(value: str, *, field: str) -> str:
-    if not isinstance(value, str) or not _SAFE_PATH_SEGMENT.match(value):
-        raise ValueError(f"invalid {field}: must match [A-Za-z0-9._-]+ (got {value!r})")
+    if not isinstance(value, str) or not _SAFE_PATH_SEGMENT.fullmatch(value):
+        raise ValueError(f"invalid {field}: must match {_SEGMENT} (got {value!r})")
     return value
 
 
@@ -50,8 +53,7 @@ class DatashareClient:
     async def list_projects(self) -> list[dict[str, Any]]:
         resp = await self._http.get("/api/project/")
         raise_for_status(resp, context="list_projects")
-        data: list[dict[str, Any]] = resp.json()
-        return data
+        return cast(list[dict[str, Any]], resp.json())
 
     async def search(self, *, project: str, query: dict[str, Any]) -> dict[str, Any]:
         _validate_path_segment(project, field="project")
@@ -60,8 +62,7 @@ class DatashareClient:
             json=query,
         )
         raise_for_status(resp, context="search_documents")
-        data: dict[str, Any] = resp.json()
-        return data
+        return cast(dict[str, Any], resp.json())
 
     async def get_document_metadata(
         self, *, project: str, doc_id: str, routing: str | None = None
@@ -71,8 +72,7 @@ class DatashareClient:
         params = {"routing": routing} if routing else None
         resp = await self._http.get(f"/api/{project}/documents/{doc_id}", params=params)
         raise_for_status(resp, context="get_document_metadata")
-        data: dict[str, Any] = resp.json()
-        return data
+        return cast(dict[str, Any], resp.json())
 
     async def get_document_content(
         self,
@@ -131,15 +131,13 @@ class DatashareClient:
             params=params,
         )
         raise_for_status(resp, context="get_document_content", resource=resource)
-        data: dict[str, Any] = resp.json()
-        return data
+        return cast(dict[str, Any], resp.json())
 
     async def get_mapping(self, *, project: str) -> dict[str, Any]:
         _validate_path_segment(project, field="project")
         resp = await self._http.get(f"/api/index/search/{project}/_mapping")
         raise_for_status(resp, context=f"datashare://index/{project}/mapping", resource=True)
-        data: dict[str, Any] = resp.json()
-        return data
+        return cast(dict[str, Any], resp.json())
 
     async def get_project_summary(self, *, project: str, format: str = "json") -> dict[str, Any]:
         """Generate comprehensive project summary combining all analyses."""
@@ -478,9 +476,8 @@ class DatashareClient:
             json=query,
         )
         raise_for_status(resp, context="_get_total_count")
-        result: dict[str, Any] = resp.json()
-        total: int = result.get("hits", {}).get("total", {}).get("value", 0)
-        return total
+        result = cast(dict[str, Any], resp.json())
+        return cast(int, result.get("hits", {}).get("total", {}).get("value", 0))
 
     async def get_temporal_distribution(self, *, project: str) -> dict[str, Any]:
         """Get document counts grouped by year with peak detection."""

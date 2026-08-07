@@ -10,6 +10,7 @@ Shapes were read off the live `tenderchad` instance (Datashare 21.2.1, Elasticse
 8.19.8).
 """
 
+from datetime import UTC, datetime
 from typing import Any
 
 # The exact key set `get_document_content` is specified to return. `targetLanguage` is the
@@ -97,12 +98,51 @@ def search_payload(
 
 
 def type_buckets(*pairs: tuple[str, int]) -> dict[str, Any]:
-    """A `terms` aggregation body, as the content-type analytics read it."""
+    """The `by_type` terms aggregation, under the name `get_document_type_distribution`
+    actually requests and reads (`client.py`: `aggs={"by_type": ...}` then
+    `aggs.get("by_type", ...)`)."""
     return {
-        "content_types": {
+        "by_type": {
             "doc_count_error_upper_bound": 0,
             "sum_other_doc_count": 0,
             "buckets": [{"key": k, "doc_count": n} for k, n in pairs],
+        }
+    }
+
+
+def language_buckets(*pairs: tuple[str, int]) -> dict[str, Any]:
+    """The `by_language` terms aggregation read by `get_project_overview`."""
+    return {
+        "by_language": {
+            "doc_count_error_upper_bound": 0,
+            "sum_other_doc_count": 0,
+            "buckets": [{"key": k, "doc_count": n} for k, n in pairs],
+        }
+    }
+
+
+def date_range_aggs(*, min_ms: float, max_ms: float) -> dict[str, Any]:
+    """The `min_date` / `max_date` aggregations read by `get_project_overview`."""
+    return {"min_date": {"value": min_ms}, "max_date": {"value": max_ms}}
+
+
+def year_buckets(*pairs: tuple[int, int]) -> dict[str, Any]:
+    """The `by_year` date_histogram read by `get_temporal_distribution`.
+
+    Takes `(year, count)` and emits the epoch-millisecond `key` the client actually reads
+    — it parses `bucket["key"]` through `datetime.fromtimestamp` and ignores
+    `key_as_string`. A fixture that puts the year only in `key_as_string` tests nothing.
+    """
+    return {
+        "by_year": {
+            "buckets": [
+                {
+                    "key": int(datetime(y, 1, 1, tzinfo=UTC).timestamp() * 1000),
+                    "key_as_string": str(y),
+                    "doc_count": n,
+                }
+                for y, n in pairs
+            ]
         }
     }
 
@@ -137,9 +177,9 @@ def content_payload(
 ) -> dict[str, Any]:
     """The content payload, carrying every key in `CONTENT_KEYS`.
 
-    `maxOffset` defaults to the full document length rather than `len(content)`, because
-    the two differ for a ranged read and conflating them is exactly the bug the shared
-    assertion exists to catch.
+    `maxOffset` defaults to `len(content)`, which is only correct for a whole-document
+    read. Pass `max_offset=` explicitly for a ranged one: there the two differ, and
+    conflating them is exactly the bug `assert_content_payload` exists to catch.
     """
     return {
         "content": content,

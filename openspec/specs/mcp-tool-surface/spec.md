@@ -114,9 +114,13 @@ is supplied. Supplying both, or neither, SHALL be accepted.
 
 ### Requirement: Path segments are validated before a request is built
 
-Every `project` and `doc_id` value SHALL be matched against `[A-Za-z0-9._-]+` in full.
-A value that does not match SHALL raise `ValueError` before any request is constructed,
-so that no unvalidated caller input can reach the URL path.
+Every `project` and `doc_id` value SHALL be matched against `[A-Za-z0-9._-]+` over its
+entire length. A value that does not match SHALL raise `ValueError` before any request is
+constructed, so that no unvalidated caller input can reach the URL path.
+
+"Entire length" is normative rather than incidental: an anchored `^...$` match is NOT
+sufficient, because `$` also matches immediately before a trailing newline and would
+admit `tenderchad\n`.
 
 The character set excludes `/`, `%`, whitespace and every other character, which is what
 keeps a caller-supplied value from traversing into or forging a different Datashare
@@ -130,6 +134,11 @@ route.
 #### Scenario: A document id is percent-encoded
 
 - **WHEN** a tool is called with a `doc_id` containing `%2F`
+- **THEN** `ValueError` is raised and no request is sent
+
+#### Scenario: A project name carries a trailing newline
+
+- **WHEN** a tool is called with a `project` of `tenderchad\n`
 - **THEN** `ValueError` is raised and no request is sent
 
 #### Scenario: An ordinary identifier is supplied

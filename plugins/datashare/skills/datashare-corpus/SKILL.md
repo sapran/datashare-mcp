@@ -35,7 +35,7 @@ actually there.
 
 Three tools answer "what am I even looking at", cheaply:
 
-- `get_project_overview(project)` — document count, size, the top content types.
+- `get_project_overview(project)` — document count, language distribution, creation-date range.
 - `get_document_type_distribution(project)` — content types with counts and percentages.
 - `get_temporal_distribution(project)` — documents by year, with peaks called out.
 

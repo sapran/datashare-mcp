@@ -83,7 +83,7 @@ API-key handling and troubleshooting — is documented in
 **Tools (8):**
 
 - `list_projects()` — discover the projects on this instance.
-- `get_project_overview(project)` — document count, size and top content types at a glance.
+- `get_project_overview(project)` — document count, language distribution and creation-date range.
 - `get_document_type_distribution(project)` — content types with counts and percentages.
 - `get_temporal_distribution(project)` — document counts by year, with peak detection.
 - `get_project_summary(project, format?)` — the three analyses above combined, as JSON or Markdown.

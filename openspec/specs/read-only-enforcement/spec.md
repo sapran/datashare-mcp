@@ -111,26 +111,47 @@ make this requirement load-bearing rather than redundant:
 - **WHEN** `GET /api/index/search/tenderchad/_cluster/settings` is attempted
 - **THEN** it is refused, even though Datashare's own check would forward any GET path
 
-### Requirement: A request leaving the configured host is refused
+### Requirement: A request leaving the configured origin is refused
 
-The server SHALL refuse any request whose host differs from the host of the configured
-Datashare URL.
+The server SHALL refuse any request whose origin — scheme, host and port taken together —
+differs from the origin of the configured Datashare URL. Host alone SHALL NOT be
+sufficient.
 
 Without this, a redirect could re-send a request — a 307 preserves both method and body,
-and the client attaches the bearer API key to every request — to a host the operator
-never configured. Redirects are not followed today, so this requirement is what keeps
-that from silently becoming exploitable if they ever are.
+and the client attaches the bearer API key to every request — somewhere the operator
+never configured. Host-only matching would admit two such destinations: a different port
+on the same machine, which in the documented local topology is the Elasticsearch
+container rather than Datashare; and an `https`→`http` downgrade, which puts the bearer
+key on the wire in cleartext. Redirects are not followed today, so this requirement is
+what keeps that from silently becoming exploitable if they ever are.
 
 #### Scenario: A request targets another host
 
 - **WHEN** a request is issued whose host differs from the configured one
-- **THEN** `ReadOnlyViolation` is raised naming the configured host, and the other host
+- **THEN** `ReadOnlyViolation` is raised naming the configured origin, and the other host
   receives no request and no credential
 
-#### Scenario: A redirect points at another host
+#### Scenario: A request targets another port on the same host
 
-- **WHEN** an allowed request is answered with a redirect to a different host
-- **THEN** the other host receives no request and no credential
+- **WHEN** a request is issued to the configured host on a different port
+- **THEN** it is refused, and that port receives no request and no credential
+
+#### Scenario: A request downgrades the scheme
+
+- **WHEN** the configured URL is `https` and a request is issued to the same host over
+  `http`
+- **THEN** it is refused, so the bearer key is never sent in cleartext
+
+#### Scenario: The default port is written explicitly
+
+- **WHEN** the configured URL is `http://ds.test:80` and a request targets
+  `http://ds.test/api/project/`
+- **THEN** the request is allowed, because the two origins are equal
+
+#### Scenario: A redirect points at another origin
+
+- **WHEN** an allowed request is answered with a redirect to a different origin
+- **THEN** that origin receives no request and no credential
 
 ### Requirement: A base path prefix does not weaken matching
 
@@ -151,16 +172,38 @@ configured prefix SHALL be refused.
   `https://ds.test/api/project/`
 - **THEN** it is refused
 
+### Requirement: Matching uses the path that is actually sent
+
+The allowlist SHALL be matched against the request's raw, still-percent-encoded path —
+the bytes placed on the wire — and SHALL NOT be matched against a percent-decoded form.
+
+Matching a decoded path authorises one string while sending another: an HTTP client that
+preserves pre-existing `%xx` escapes will transmit `/api/%2e%2e/documents/d1` while the
+decoded form `/api/../documents/d1` matches an allowlisted rule. Decoding cannot be
+assumed to only introduce path separators, because `%2e` and `%72` decode to characters
+inside the accepted segment charset.
+
+#### Scenario: A path decodes to an allowlisted one but is not sent as one
+
+- **WHEN** a request targets `/api/%2e%2e/documents/d1`, which percent-decodes to a path
+  the allowlist accepts
+- **THEN** it is refused, because the path actually transmitted is not an allowlisted one
+
+#### Scenario: An allowlisted path is re-encoded character by character
+
+- **WHEN** a request targets `/api/index/search/{project}/_sea%72ch`
+- **THEN** it is refused, even though it decodes to the allowlisted `_search` path
+
 ### Requirement: Widening the surface requires widening the allowlist
 
 The allowlist SHALL be the single place that determines which requests may be sent. No
 tool argument, caller-supplied value, configuration setting or redirect SHALL be able to
 admit a request the allowlist does not already contain.
 
-The path-segment pattern used by the allowlist SHALL match the character set the client
-validates caller input against, so the validator and the guard cannot disagree. That set
-SHALL exclude `%`, which is the tripwire for matching a decoded path: if `%` were ever
-admitted, matching would have to move to the raw path.
+The client's input validator SHALL be derived from the allowlist's own path-segment
+pattern rather than restating it, so the two cannot disagree. That pattern SHALL exclude
+`%`, whitespace and `/`, so that every path this server legitimately builds is identical
+in raw and decoded form and no caller value can extend the path.
 
 #### Scenario: A caller supplies a value intended to reach another route
 
@@ -168,8 +211,13 @@ admitted, matching would have to move to the raw path.
 - **THEN** the request is refused, either by input validation or by the allowlist, and is
   not sent
 
+#### Scenario: A caller value carries trailing whitespace
+
+- **WHEN** a `project` of `tenderchad\n` is supplied
+- **THEN** input validation raises `ValueError` and no request is built
+
 #### Scenario: The accepted character set is inspected
 
 - **WHEN** the path-segment pattern used by the allowlist is inspected
-- **THEN** it does not admit `%`
-
+- **THEN** it does not admit `%`, and the client's input validator is compiled from that
+  same pattern
