@@ -1,0 +1,25 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "datashare-mcp",
+  "owner": {
+    "name": "Vlad Styran",
+    "email": "sapran@gmail.com"
+  },
+  "metadata": {
+    "description": "Read-only MCP access to an ICIJ Datashare instance for LLM agents."
+  },
+  "plugins": [
+    {
+      "name": "datashare",
+      "source": "./plugins/datashare",
+      "version": "0.2.0",
+      "description": "Read-only MCP server over the ICIJ Datashare HTTP API: 8 search/analytics/read tools, 3 resources, and the datashare-corpus method skill.",
+      "category": "security",
+      "keywords": ["datashare", "icij", "osint", "elasticsearch", "mcp", "investigation"],
+      "author": { "name": "Vlad Styran", "email": "sapran@gmail.com" },
+      "homepage": "https://github.com/sapran/datashare-mcp",
+      "repository": "https://github.com/sapran/datashare-mcp",
+      "license": "MIT"
+    }
+  ]
+}
