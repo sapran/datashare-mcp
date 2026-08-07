@@ -23,7 +23,10 @@ classifiers = [
 ]
 dependencies = [
     "fastmcp>=3,<4",
-    "httpx>=0.27",
+    # The read-only guard is an httpx request event hook, so the major version is
+    # bounded to stop hook semantics changing under a routine upgrade. See
+    # src/datashare_mcp/readonly.py.
+    "httpx>=0.27,<1",
     "pydantic-settings>=2.5",
 ]
 
@@ -51,8 +54,15 @@ dev = [
     "pytest-asyncio>=0.23",
     "respx>=0.21",
     "ruff>=0.6",
-    "ty",
+    "mypy>=1.11",
 ]
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+python_version = "3.12"
+packages = ["datashare_mcp"]
+strict = true
+mypy_path = "src"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

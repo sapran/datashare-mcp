@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "mcp": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/sapran/datashare-mcp.git",
+        "datashare-mcp"
+      ],
+      "env": {
+        "DATASHARE_URL": "!printf %s \"${DATASHARE_URL:-http://localhost:8888}\"",
+        "DATASHARE_API_KEY": "!security find-generic-password -s datashare-mcp -a \"$USER\" -w 2>/dev/null || printf %s \"$DATASHARE_API_KEY\""
+      }
+    }
+  }
+}

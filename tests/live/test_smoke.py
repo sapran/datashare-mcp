@@ -5,6 +5,7 @@ import pytest
 
 from datashare_mcp.client import DatashareClient
 from datashare_mcp.config import Settings
+from tests.shapes import assert_content_payload, assert_project_list, assert_search_envelope
 
 LIVE = os.getenv("DATASHARE_LIVE_TESTS") == "1"
 PROJECT = os.getenv("DATASHARE_LIVE_PROJECT", "local-datashare")
@@ -25,7 +26,7 @@ async def live_client():
 
 async def test_list_projects(live_client):
     projects = await live_client.list_projects()
-    assert isinstance(projects, list)
+    assert_project_list(projects)
     assert len(projects) >= 1
     names = [p.get("name") for p in projects]
     assert PROJECT in names, f"Expected project {PROJECT} in {names}"
@@ -40,7 +41,7 @@ async def test_mapping_parses(live_client):
 
 async def test_search_match_all(live_client):
     res = await live_client.search(project=PROJECT, query={"query": {"match_all": {}}, "size": 1})
-    assert "hits" in res
+    assert_search_envelope(res)
 
 
 async def test_full_content_no_range(live_client):
@@ -48,11 +49,12 @@ async def test_full_content_no_range(live_client):
     # relational-DB path (empty for index-only docs → HTTP 500). The client probes
     # maxOffset then fetches the whole Elasticsearch-backed range.
     res = await live_client.search(project=PROJECT, query={"query": {"match_all": {}}, "size": 1})
+    assert_search_envelope(res)
     hits = res["hits"]["hits"]
     if not hits:
         pytest.skip("no documents indexed")
     doc_id = hits[0]["_id"]
     routing = hits[0].get("_routing")
     out = await live_client.get_document_content(project=PROJECT, doc_id=doc_id, routing=routing)
-    assert "content" in out
-    assert len(out["content"]) == out["maxOffset"]
+    # The same assertion the mocked suite uses, so the two cannot drift apart.
+    assert_content_payload(out, whole_document=True)

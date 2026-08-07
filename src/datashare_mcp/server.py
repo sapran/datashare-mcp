@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -172,6 +172,6 @@ def build_server(settings: Settings) -> tuple[FastMCP, DatashareClient]:
         get_document_content tool with offset/limit instead.
         """
         payload = await client.get_document_content(project=project, doc_id=doc_id, resource=True)
-        return payload.get("content", "")
+        return cast(str, payload.get("content", ""))
 
     return mcp, client

@@ -1,6 +1,20 @@
 import httpx
 import pytest
 
+from tests.shapes import (
+    assert_content_payload,
+    assert_project_list,
+    assert_search_envelope,
+    content_payload,
+    date_range_aggs,
+    document_metadata,
+    language_buckets,
+    project_list,
+    search_payload,
+    type_buckets,
+    year_buckets,
+)
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -16,9 +30,10 @@ async def test_sends_bearer_header(client, respx_mock):
 
 async def test_list_projects(client, respx_mock):
     respx_mock.get("/api/project/").mock(
-        return_value=httpx.Response(200, json=[{"name": "leaks"}, {"name": "panama"}])
+        return_value=httpx.Response(200, json=project_list("leaks", "panama"))
     )
     out = await client.list_projects()
+    assert_project_list(out)
     assert [p["name"] for p in out] == ["leaks", "panama"]
 
 
@@ -29,21 +44,23 @@ async def test_search_passes_through_body(client, respx_mock):
         import json
 
         body_seen.update(json.loads(request.content))
-        return httpx.Response(200, json={"hits": {"total": {"value": 0}, "hits": []}})
+        return httpx.Response(200, json=search_payload())
 
     respx_mock.post("/api/index/search/leaks/_search").mock(side_effect=handler)
     query = {"query": {"match_all": {}}, "size": 5}
     out = await client.search(project="leaks", query=query)
     assert body_seen == query
-    assert out["hits"]["total"]["value"] == 0
+    assert_search_envelope(out, min_hits=1)
+    assert out["hits"]["hits"][0]["_routing"] == "d1"
 
 
 async def test_get_document_metadata(client, respx_mock):
     respx_mock.get("/api/leaks/documents/abc").mock(
-        return_value=httpx.Response(200, json={"id": "abc", "contentType": "application/pdf"})
+        return_value=httpx.Response(200, json=document_metadata(id="abc"))
     )
     out = await client.get_document_metadata(project="leaks", doc_id="abc")
     assert out["id"] == "abc"
+    assert out["contentType"] == "application/pdf"
 
 
 async def test_get_document_metadata_with_routing(client, respx_mock):
@@ -65,16 +82,14 @@ async def test_get_document_content_no_range_uses_es_path(client, respx_mock):
         limit = request.url.params.get("limit")
         seen.append((offset, limit))
         if limit == "0":
-            return httpx.Response(
-                200, json={"content": "", "maxOffset": 5, "offset": 0, "limit": 0}
-            )
+            return httpx.Response(200, json=content_payload(content="", max_offset=5, limit=0))
         return httpx.Response(
-            200,
-            json={"content": "hello", "maxOffset": 5, "offset": 0, "limit": int(limit)},
+            200, json=content_payload(content="hello", max_offset=5, limit=int(limit))
         )
 
     respx_mock.get("/api/leaks/documents/content/abc").mock(side_effect=handler)
     out = await client.get_document_content(project="leaks", doc_id="abc")
+    assert_content_payload(out, whole_document=True)
     assert out["content"] == "hello"
     assert out["maxOffset"] == 5
     # probe (limit=0) then full (limit=maxOffset); never the broken no-range request
@@ -84,12 +99,9 @@ async def test_get_document_content_no_range_uses_es_path(client, respx_mock):
 async def test_get_document_content_full_empty_skips_second_call(client, respx_mock):
     route = respx_mock.get(
         "/api/leaks/documents/content/abc", params={"offset": "0", "limit": "0"}
-    ).mock(
-        return_value=httpx.Response(
-            200, json={"content": "", "maxOffset": 0, "offset": 0, "limit": 0}
-        )
-    )
+    ).mock(return_value=httpx.Response(200, json=content_payload(content="", max_offset=0)))
     out = await client.get_document_content(project="leaks", doc_id="abc")
+    assert_content_payload(out, whole_document=True)
     assert out["content"] == ""
     assert out["maxOffset"] == 0
     assert route.call_count == 1  # empty doc → only the probe, no full fetch
@@ -100,12 +112,13 @@ async def test_get_document_content_with_range(client, respx_mock):
         "/api/leaks/documents/content/abc",
         params={"offset": "0", "limit": "100"},
     ).mock(
-        return_value=httpx.Response(
-            200, json={"content": "h", "maxOffset": 5, "start": 0, "size": 1}
-        )
+        return_value=httpx.Response(200, json=content_payload(content="h", max_offset=5, limit=100))
     )
-    await client.get_document_content(project="leaks", doc_id="abc", offset=0, limit=100)
+    out = await client.get_document_content(project="leaks", doc_id="abc", offset=0, limit=100)
     assert route.called
+    # A ranged read returns a prefix: maxOffset is still the full length.
+    assert_content_payload(out)
+    assert len(out["content"]) < out["maxOffset"]
 
 
 async def test_get_document_content_rejects_half_range(client):
@@ -164,19 +177,12 @@ async def test_get_project_overview(client, respx_mock):
     respx_mock.post("/api/index/search/leaks/_search").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "hits": {"total": {"value": 100}, "hits": []},
-                "aggregations": {
-                    "by_language": {
-                        "buckets": [
-                            {"key": "ENGLISH", "doc_count": 80},
-                            {"key": "RUSSIAN", "doc_count": 20},
-                        ]
-                    },
-                    "min_date": {"value": 1000000},
-                    "max_date": {"value": 2000000},
-                },
-            },
+            json=search_payload(
+                hits=[],
+                total=100,
+                aggregations=language_buckets(("ENGLISH", 80), ("RUSSIAN", 20))
+                | date_range_aggs(min_ms=1000000, max_ms=2000000),
+            ),
         )
     )
     out = await client.get_project_overview(project="leaks")
@@ -193,23 +199,21 @@ async def test_get_document_type_distribution(client, respx_mock):
         if "aggs" in body and "by_type" in body["aggs"]:
             return httpx.Response(
                 200,
-                json={
-                    "hits": {"total": {"value": 100}, "hits": []},
-                    "aggregations": {
-                        "by_type": {
-                            "buckets": [
-                                {"key": "application/pdf", "doc_count": 50},
-                                {"key": "application/msword", "doc_count": 30},
-                                {
-                                    "key": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    "doc_count": 20,
-                                },
-                            ]
-                        }
-                    },
-                },
+                json=search_payload(
+                    hits=[],
+                    total=100,
+                    aggregations=type_buckets(
+                        ("application/pdf", 50),
+                        ("application/msword", 30),
+                        (
+                            "application/vnd.openxmlformats-officedocument."
+                            "wordprocessingml.document",
+                            20,
+                        ),
+                    ),
+                ),
             )
-        return httpx.Response(200, json={"hits": {"total": {"value": 100}, "hits": []}})
+        return httpx.Response(200, json=search_payload(hits=[], total=100))
 
     respx_mock.post("/api/index/search/leaks/_search").mock(side_effect=handler)
     out = await client.get_document_type_distribution(project="leaks")
@@ -224,25 +228,9 @@ async def test_get_temporal_distribution(client, respx_mock):
     respx_mock.post("/api/index/search/leaks/_search").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "hits": {"total": {"value": 100}, "hits": []},
-                "aggregations": {
-                    "by_year": {
-                        "buckets": [
-                            {
-                                "key": 1609459200000,
-                                "key_as_string": "yyyy1609459200000",
-                                "doc_count": 30,
-                            },
-                            {
-                                "key": 1640995200000,
-                                "key_as_string": "yyyy1640995200000",
-                                "doc_count": 70,
-                            },
-                        ]
-                    }
-                },
-            },
+            json=search_payload(
+                hits=[], total=100, aggregations=year_buckets((2021, 30), (2022, 70))
+            ),
         )
     )
     out = await client.get_temporal_distribution(project="leaks")
@@ -257,32 +245,19 @@ async def test_get_project_summary_json(client, respx_mock):
     respx_mock.post("/api/index/search/leaks/_search").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "hits": {"total": {"value": 100}, "hits": []},
-                "aggregations": {
-                    "by_language": {"buckets": [{"key": "ENGLISH", "doc_count": 80}]},
-                    "min_date": {"value": 1000000},
-                    "max_date": {"value": 2000000},
-                    "by_type": {"buckets": [{"key": "application/pdf", "doc_count": 50}]},
-                    "by_year": {
-                        "buckets": [
-                            {
-                                "key": 1609459200000,
-                                "key_as_string": "yyyy1609459200000",
-                                "doc_count": 30,
-                            }
-                        ]
-                    },
-                },
-            },
+            json=search_payload(
+                hits=[],
+                total=100,
+                aggregations=language_buckets(("ENGLISH", 80))
+                | date_range_aggs(min_ms=1000000, max_ms=2000000)
+                | type_buckets(("application/pdf", 50))
+                | year_buckets((2021, 30)),
+            ),
         )
     )
     respx_mock.get("/api/leaks/documents/content/abc").mock(
-        return_value=httpx.Response(
-            200, json={"content": "test", "maxOffset": 4, "offset": 0, "limit": 0}
-        )
+        return_value=httpx.Response(200, json=content_payload(content="test"))
     )
-
     out = await client.get_project_summary(project="leaks", format="json")
     assert "metadata" in out
     assert "overview" in out
@@ -293,35 +268,18 @@ async def test_get_project_summary_markdown(client, respx_mock):
     respx_mock.post("/api/index/search/leaks/_search").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "hits": {"total": {"value": 100}, "hits": []},
-                "aggregations": {
-                    "by_language": {"buckets": [{"key": "ENGLISH", "doc_count": 80}]},
-                    "min_date": {"value": 1609459200000},
-                    "max_date": {"value": 1640995200000},
-                    "by_type": {"buckets": [{"key": "application/pdf", "doc_count": 50}]},
-                    "by_year": {
-                        "buckets": [
-                            {
-                                "key": 1609459200000,
-                                "key_as_string": "yyyy1609459200000",
-                                "doc_count": 30,
-                            },
-                            {
-                                "key": 1640995200000,
-                                "key_as_string": "yyyy1640995200000",
-                                "doc_count": 70,
-                            },
-                        ]
-                    },
-                },
-            },
+            json=search_payload(
+                hits=[],
+                total=100,
+                aggregations=language_buckets(("ENGLISH", 80))
+                | date_range_aggs(min_ms=1609459200000, max_ms=1640995200000)
+                | type_buckets(("application/pdf", 50))
+                | year_buckets((2021, 30), (2022, 70)),
+            ),
         )
     )
     respx_mock.get("/api/leaks/documents/content/abc").mock(
-        return_value=httpx.Response(
-            200, json={"content": "test", "maxOffset": 4, "offset": 0, "limit": 0}
-        )
+        return_value=httpx.Response(200, json=content_payload(content="test"))
     )
 
     out = await client.get_project_summary(project="leaks", format="markdown")

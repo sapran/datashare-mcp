@@ -3,13 +3,23 @@ import pytest
 from fastmcp import Client as MCPClient
 
 from datashare_mcp.server import build_server
+from tests.shapes import (
+    content_payload,
+    date_range_aggs,
+    language_buckets,
+    project_list,
+    search_hit,
+    search_payload,
+    type_buckets,
+    year_buckets,
+)
 
 pytestmark = pytest.mark.asyncio
 
 
 async def test_list_projects_tool(settings, respx_mock):
     respx_mock.get("/api/project/").mock(
-        return_value=httpx.Response(200, json=[{"name": "leaks"}, {"name": "panama"}])
+        return_value=httpx.Response(200, json=project_list("leaks", "panama"))
     )
     server, ds_client = build_server(settings)
     try:
@@ -29,7 +39,7 @@ async def test_search_documents_tool(settings, respx_mock):
         captured.update(_json.loads(request.content))
         return httpx.Response(
             200,
-            json={"hits": {"total": {"value": 1}, "hits": [{"_id": "abc"}]}},
+            json=search_payload(hits=[search_hit(id="abc")]),
         )
 
     respx_mock.post("/api/index/search/leaks/_search").mock(side_effect=handler)
@@ -67,9 +77,7 @@ async def test_get_document_metadata_tool(settings, respx_mock):
 
 async def test_get_document_content_tool_full(settings, respx_mock):
     respx_mock.get("/api/leaks/documents/content/abc").mock(
-        return_value=httpx.Response(
-            200, json={"content": "Full text", "maxOffset": 9, "start": 0, "size": 9}
-        )
+        return_value=httpx.Response(200, json=content_payload(content="Full text"))
     )
     server, ds_client = build_server(settings)
     try:
@@ -89,7 +97,7 @@ async def test_get_document_content_tool_range(settings, respx_mock):
         params={"offset": "100", "limit": "50"},
     ).mock(
         return_value=httpx.Response(
-            200, json={"content": "X", "maxOffset": 1000, "start": 100, "size": 50}
+            200, json=content_payload(content="X", max_offset=1000, offset=100, limit=50)
         )
     )
 
@@ -124,14 +132,12 @@ async def test_get_project_overview_tool(settings, respx_mock):
     respx_mock.post("/api/index/search/leaks/_search").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "hits": {"total": {"value": 100}, "hits": []},
-                "aggregations": {
-                    "by_language": {"buckets": [{"key": "ENGLISH", "doc_count": 80}]},
-                    "min_date": {"value": 1000000},
-                    "max_date": {"value": 2000000},
-                },
-            },
+            json=search_payload(
+                hits=[],
+                total=100,
+                aggregations=language_buckets(("ENGLISH", 80))
+                | date_range_aggs(min_ms=1000000, max_ms=2000000),
+            ),
         )
     )
 
@@ -153,19 +159,13 @@ async def test_get_document_type_distribution_tool(settings, respx_mock):
         if "by_type" in str(body):
             return httpx.Response(
                 200,
-                json={
-                    "hits": {"total": {"value": 100}, "hits": []},
-                    "aggregations": {
-                        "by_type": {
-                            "buckets": [
-                                {"key": "application/pdf", "doc_count": 50},
-                                {"key": "application/msword", "doc_count": 50},
-                            ]
-                        }
-                    },
-                },
+                json=search_payload(
+                    hits=[],
+                    total=100,
+                    aggregations=type_buckets(("application/pdf", 50), ("application/msword", 50)),
+                ),
             )
-        return httpx.Response(200, json={"hits": {"total": {"value": 100}, "hits": []}})
+        return httpx.Response(200, json=search_payload(hits=[], total=100))
 
     respx_mock.post("/api/index/search/leaks/_search").mock(side_effect=handler)
 
@@ -187,25 +187,9 @@ async def test_get_temporal_distribution_tool(settings, respx_mock):
     respx_mock.post("/api/index/search/leaks/_search").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "hits": {"total": {"value": 100}, "hits": []},
-                "aggregations": {
-                    "by_year": {
-                        "buckets": [
-                            {
-                                "key": 1609459200000,
-                                "key_as_string": "yyyy1609459200000",
-                                "doc_count": 30,
-                            },
-                            {
-                                "key": 1640995200000,
-                                "key_as_string": "yyyy1640995200000",
-                                "doc_count": 70,
-                            },
-                        ]
-                    }
-                },
-            },
+            json=search_payload(
+                hits=[], total=100, aggregations=year_buckets((2021, 30), (2022, 70))
+            ),
         )
     )
 
@@ -224,30 +208,18 @@ async def test_get_project_summary_tool(settings, respx_mock):
     respx_mock.post("/api/index/search/leaks/_search").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "hits": {"total": {"value": 100}, "hits": []},
-                "aggregations": {
-                    "by_language": {"buckets": [{"key": "ENGLISH", "doc_count": 80}]},
-                    "min_date": {"value": 1609459200000},
-                    "max_date": {"value": 1640995200000},
-                    "by_type": {"buckets": [{"key": "application/pdf", "doc_count": 50}]},
-                    "by_year": {
-                        "buckets": [
-                            {
-                                "key": 1609459200000,
-                                "key_as_string": "yyyy1609459200000",
-                                "doc_count": 30,
-                            }
-                        ]
-                    },
-                },
-            },
+            json=search_payload(
+                hits=[],
+                total=100,
+                aggregations=language_buckets(("ENGLISH", 80))
+                | date_range_aggs(min_ms=1609459200000, max_ms=1640995200000)
+                | type_buckets(("application/pdf", 50))
+                | year_buckets((2021, 30)),
+            ),
         )
     )
     respx_mock.get("/api/leaks/documents/content/abc").mock(
-        return_value=httpx.Response(
-            200, json={"content": "test", "maxOffset": 4, "offset": 0, "limit": 0}
-        )
+        return_value=httpx.Response(200, json=content_payload(content="test"))
     )
 
     server, ds_client = build_server(settings)
