@@ -31,8 +31,12 @@ Then set environment variables (in your MCP client's config, see below):
 |---|---|---|---|
 | `DATASHARE_URL` | yes | — | e.g. `http://localhost:8888`. Trailing slashes are stripped. |
 | `DATASHARE_API_KEY` | yes | — | Bearer key from `datashare api-key create`. |
-| `DATASHARE_TIMEOUT_SECS` | no | 30 | Per-request HTTP timeout. |
-| `DATASHARE_VERIFY_TLS` | no | true | Set `false` for self-signed dev certificates. |
+| `DATASHARE_TIMEOUT_SECS` | no | 30 | Per-operation HTTP timeout. |
+| `DATASHARE_DEADLINE_SECS` | no | 120 | Total wall-clock budget for one call. |
+| `DATASHARE_MAX_SEARCH_SIZE` | no | 200 | Clamp applied to a search body's `size`/`from`. |
+| `DATASHARE_MAX_CONTENT_BYTES` | no | 1000000 | Ceiling on text fetched in one call; larger documents come back `truncated`. |
+| `DATASHARE_CA_BUNDLE` | no | — | PEM CA bundle. Use this for a self-signed or private-CA instance — verification stays on. |
+| `DATASHARE_VERIFY_TLS` | no | true | `false` disables certificate validation for every request, and every request carries the bearer key. Loopback or trusted links only; on a remote instance set `DATASHARE_CA_BUNDLE` instead. |
 
 ## Wire to Claude Code
 
