@@ -28,13 +28,15 @@ a format string — and the only inputs are the operator's own `$USER`, `$DATASH
 `$DATASHARE_API_KEY` and login Keychain. Recorded so the property is a checked one rather
 than an assumed one.
 
-## The `uvx --from` spec is unpinned
+## The `uvx --from` spec is pinned to a commit SHA
 
-`plugins/datashare/.mcp.json` installs from `git+https://github.com/sapran/datashare-mcp.git`
-with no ref, so an install or upgrade resolves to whatever the default branch head is at
-that moment. This is deliberate while the repository carries no release tag. Once one
-exists, change `--from` to `...datashare-mcp.git@v<tag>` in both `.mcp.json` and the
-`Pinning and updates` section of `plugins/datashare/README.md`.
+`plugins/datashare/.mcp.json` installs from
+`git+https://github.com/sapran/datashare-mcp.git@<40-char sha>`. An unpinned spec would
+resolve the moving default-branch HEAD on every cold cache and hand the resulting code
+`DATASHARE_API_KEY`, so push access to the repository would reach every installed host.
+Bumping the server means replacing the SHA with a reviewed commit, in `.mcp.json`, the
+manual-install example and the `Pinning and updates` section of
+`plugins/datashare/README.md`. A tag is mutable and does not replace the SHA.
 
 ## `get_document_content` and `list_projects` return unvalidated JSON
 

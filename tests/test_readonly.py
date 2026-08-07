@@ -330,3 +330,86 @@ def test_validator_rejects_whitespace_and_separators(value: str) -> None:
 
     with pytest.raises(ValueError, match="invalid project"):
         _validate_path_segment(value, field="project")
+
+
+# -- refusal messages must not carry credentials ------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refusal_message_omits_url_userinfo() -> None:
+    """httpx derives BasicAuth from URL userinfo, so `https://user:pw@host` is a working
+    DATASHARE_URL. `str(httpx.URL)` renders that password verbatim — only `__repr__`
+    masks it — so a refusal message must never interpolate the URL object."""
+    hook = read_only_hook("http://alice:hunter2@datashare.test")
+    request = httpx.Request("DELETE", "http://alice:hunter2@datashare.test/api/index/leaks")
+
+    with pytest.raises(ReadOnlyViolation) as excinfo:
+        await hook(request)
+
+    message = str(excinfo.value)
+    assert "hunter2" not in message
+    assert "alice" not in message
+    # It must still say what was refused.
+    assert "DELETE" in message
+    assert "/api/index/leaks" in message
+
+
+@pytest.mark.asyncio
+async def test_refusal_message_omits_the_query_string() -> None:
+    """The query is caller-influenced and adds nothing to a refusal."""
+    hook = read_only_hook("http://datashare.test")
+    request = httpx.Request("GET", "http://datashare.test/api/nope?token=secretvalue")
+
+    with pytest.raises(ReadOnlyViolation) as excinfo:
+        await hook(request)
+
+    assert "secretvalue" not in str(excinfo.value)
+
+
+# -- dot segments -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/../documents/d1",
+        "/api/../documents/content/d1",
+        "/api/leaks/documents/..",
+        "/api/index/search/../_search",
+    ],
+)
+def test_allowlist_refuses_traversal_paths(path: str) -> None:
+    """`.` and `..` are members of the segment charset, so before _SEGMENT required a
+    non-dot character these fullmatched and the guard *authorised* a path leaving the
+    /api namespace. Only httpx's incidental dot-segment collapse stood in the way, and
+    that is an undocumented property of a dependency, not a control this repo owns."""
+    assert not is_read_only("GET", path)
+    assert not is_read_only("POST", path)
+
+
+@pytest.mark.parametrize("value", [".", "..", "...", "...."])
+def test_validator_rejects_dot_only_segments(value: str) -> None:
+    from datashare_mcp.client import _validate_path_segment
+
+    with pytest.raises(ValueError, match="invalid doc_id"):
+        _validate_path_segment(value, field="doc_id")
+
+
+@pytest.mark.parametrize("value", ["a.b_c-1", "..a", "a..", "a..b", "tenderchad"])
+def test_validator_still_accepts_dots_inside_a_segment(value: str) -> None:
+    """Only an all-dots segment is a traversal; dots are legitimate in document ids."""
+    from datashare_mcp.client import _validate_path_segment
+
+    assert _validate_path_segment(value, field="doc_id") == value
+
+
+@pytest.mark.asyncio
+async def test_dot_doc_id_is_refused_before_it_becomes_another_endpoint(settings) -> None:
+    """`doc_id=".."` built /api/{project}/documents/.., which httpx normalises to
+    /api/{project} — a metadata tool silently answering with something else."""
+    client = DatashareClient(settings)
+    try:
+        with pytest.raises(ValueError, match="invalid doc_id"):
+            await client.get_document_metadata(project="leaks", doc_id="..")
+    finally:
+        await client.aclose()

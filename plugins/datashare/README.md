@@ -30,6 +30,12 @@ against a fixed allowlist in `src/datashare_mcp/readonly.py` and refused before 
 sent. That matters here because Datashare's `LOCAL` mode does not enforce API-key
 authentication at all, so a read-only credential is not an available boundary.
 
+Read that as scoped: the allowlist bounds what *this server* sends, and a LOCAL-mode
+instance is unauthenticated to everything else on the host. Anything else in the same
+session that can make an HTTP request — a shell, a fetch tool — still has full read and
+write access to the corpus, and the allowlist never sees it. See "Trust boundary" in
+[`docs/local-environment.md`](../../docs/local-environment.md).
+
 ## Install (omp)
 
 ```bash
@@ -64,8 +70,19 @@ Two variables:
 | `DATASHARE_URL` | Instance root, e.g. `http://localhost:8888`. Trailing slashes are stripped. **Defaults to `http://localhost:8888`** if unset. |
 | `DATASHARE_API_KEY` | Bearer key. Read from the login Keychain first; falls back to the environment variable. |
 
-Optional: `DATASHARE_TIMEOUT_SECS` (default `30`), `DATASHARE_VERIFY_TLS` (default `true`;
-set `false` for a self-signed instance).
+Optional: `DATASHARE_TIMEOUT_SECS` (default `30`), `DATASHARE_DEADLINE_SECS` (default
+`120`), `DATASHARE_CA_BUNDLE` (unset), `DATASHARE_VERIFY_TLS` (default `true`).
+
+On TLS, in order of preference:
+
+1. A publicly-trusted certificate — nothing to configure.
+2. A self-signed or private-CA instance: point `DATASHARE_CA_BUNDLE` at the PEM bundle.
+   Verification stays on, against your CA. The path is checked at startup, so a typo
+   fails immediately instead of on the first request.
+3. `DATASHARE_VERIFY_TLS=false` **only** for loopback or an otherwise trusted link. It
+   disables certificate validation for *every* request, and every request carries the
+   bearer key — on a remote `https://` instance that offers the key to anyone positioned
+   on the path. Use option 2 there instead.
 
 The shipped `.mcp.json` carries no literal secret. Its `env` block runs two shell
 substitutions:
@@ -116,7 +133,7 @@ For a non-default instance, export `DATASHARE_URL` — and, off macOS, `DATASHAR
       "datashare-remote": {
         "type": "stdio",
         "command": "uvx",
-        "args": ["--from", "git+https://github.com/sapran/datashare-mcp.git", "datashare-mcp"],
+        "args": ["--from", "git+https://github.com/sapran/datashare-mcp.git@37a72ddad0b9d5e2b5650e57acc9b671ecabc5bc", "datashare-mcp"],
         "env": {
           "DATASHARE_URL": "https://datashare.example.org",
           "DATASHARE_API_KEY": "<key>"
@@ -162,15 +179,22 @@ omp plugin upgrade datashare@datashare-mcp
 ```
 
 That refreshes the plugin files. The **server build** is resolved and cached separately by
-`uvx`, so to pick up new server code add `--refresh` to the args in `.mcp.json` or run:
+`uvx` from the pinned commit in `.mcp.json`.
+
+The shipped `--from` spec pins a full 40-character commit SHA:
+`git+https://github.com/sapran/datashare-mcp.git@<sha>`. That is deliberate — an unpinned
+spec resolves the moving default-branch HEAD on every cold cache, so anyone with push
+access to the repository could substitute code that receives `DATASHARE_API_KEY` from the
+launch environment. A tag is mutable and is not an acceptable substitute for the SHA.
+
+To move to newer server code, replace the SHA with the reviewed commit you want and run:
 
 ```bash
 uv cache clean datashare-mcp
 ```
 
-To pin a version, change the `--from` spec to
-`git+https://github.com/sapran/datashare-mcp.git@<tag>`. The shipped spec is deliberately
-unpinned because the repository carries no release tag yet.
+Do not add `--refresh` in place of updating the SHA; with a pinned commit it only re-fetches
+the same revision, and without a pin it defeats the pinning entirely.
 
 A release bumps the version in three places at once —
 `src/datashare_mcp/__init__.py`, `plugins/datashare/.claude-plugin/plugin.json`, and

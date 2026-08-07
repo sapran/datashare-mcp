@@ -25,10 +25,11 @@ project network.
 | MCP | `datashare-mcp` (uv tool), wired via `.mcp.json` | stdio |
 
 - `DATASHARE_DATA_DIR` is **required** — there is no default. It comes from the gitignored
-  `.env` beside the compose file, which Compose reads automatically; on this machine it is
-  `/Users/user/cab/datashare.ai/data`. Leave it unset and `up` refuses to start with
-  `required variable DATASHARE_DATA_DIR is missing a value`, rather than mounting an empty
-  directory and serving nothing. The bind also sets `create_host_path: false`, so a value
+  `.env` beside the compose file, which Compose reads automatically; set it to the
+  absolute path of your corpus, e.g. `/absolute/path/to/corpus`. Leave it unset and `up`
+  refuses to start with `required variable DATASHARE_DATA_DIR is missing a value`,
+  rather than mounting an empty directory and serving nothing. The bind also sets
+  `create_host_path: false`, so a value
   pointing at a path that does not exist fails too instead of being created empty.
 - Both published ports are bound to **`127.0.0.1` only**, matching how the Aleph stack
   publishes every one of its ports. This is not belt-and-braces: LOCAL mode does **not**
@@ -48,6 +49,37 @@ project network.
   **`local-datashare`** project must also exist (see "Register the projects" below) or
   `count-by-project` returns 500.
 - LOCAL mode = SQLite + in-memory queues, so **no Postgres/Redis/AMQP/S3-mock/Temporal**.
+
+## Trust boundary
+
+Nothing in this stack authenticates anything. Datashare runs `--mode=LOCAL`, which binds
+`CsrfFilter` and `LocalUserFilter` and never `ApiKeyFilter`; Elasticsearch runs with
+`xpack.security.enabled=false`. The bearer key the MCP server sends on every request is
+therefore **decorative against this instance** — it is checked by a SERVER-mode Datashare,
+not by this one. The only control in place is that both ports are published on loopback.
+
+So be precise about what the MCP server's read-only allowlist
+(`src/datashare_mcp/readonly.py`) is worth here:
+
+| | Reaches the corpus | Constrained by the allowlist |
+|---|---|---|
+| A tool call through `datashare-mcp` | yes | **yes** — five read endpoints, nothing else |
+| `curl http://localhost:8888/api/...` | yes, read **and write** | no |
+| `curl -XPOST http://localhost:9201/tenderchad/_delete_by_query` | yes, destroys the index | no |
+
+The allowlist is an **in-client control**: it bounds what the MCP server process sends.
+It is not a sandbox around Datashare. An agent session that holds this MCP server *and* a
+shell or a generic HTTP tool has an unauthenticated write path to the corpus that the
+allowlist never sees. What the allowlist does buy is that a compromised or mistaken caller
+of the MCP server — including a corpus document attempting an injection — cannot turn the
+server itself into that write path.
+
+If that is not good enough for a given corpus, the fix is server-side, not in the MCP
+client: run Datashare with `--mode=SERVER` so `ApiKeyFilter` is bound (which also makes
+the key meaningful), and set `xpack.security.enabled=true` with a password supplied from
+`.env`. Both change how the whole stack is operated — the UI starts demanding
+authentication and the ingest and apikey one-shots need credentials — so it is a
+deliberate switch, not a default.
 
 ## Backend source checkout
 
