@@ -44,7 +44,8 @@ DATASHARE_URL=... DATASHARE_API_KEY=... DATASHARE_LIVE_TESTS=1 \
 
 ## Pull requests
 
-- Branch from `develop` and target `develop`. `main` tracks releases.
+- Branch from `develop` and target `develop`. It is the default branch, and release tags
+  are cut from it.
 - One logical change per commit, with a [Conventional
   Commits](https://www.conventionalcommits.org) prefix: `feat:`, `fix:`, `chore:`,
   `docs:`, `refactor:`, `test:`.

@@ -34,17 +34,31 @@ than an assumed one.
 `git+https://github.com/sapran/datashare-mcp.git@<40-char sha>`. An unpinned spec would
 resolve the moving default-branch HEAD on every cold cache and hand the resulting code
 `DATASHARE_API_KEY`, so push access to the repository would reach every installed host.
-Bumping the server means replacing the SHA with a reviewed commit, in `.mcp.json`, the
-manual-install example and the `Pinning and updates` section of
-`plugins/datashare/README.md`, and the four install examples in `README.md`. A tag is
-mutable and does not replace the SHA.
+Bumping the server means replacing the SHA everywhere it appears literally. Six
+occurrences, three files: `plugins/datashare/.mcp.json`, the "Two instances at once"
+example at `plugins/datashare/README.md:136`, and the install command plus three client
+examples in `README.md`. The `Pinning and updates` prose writes `<sha>` as a placeholder
+and needs no edit. `git grep -c '<old sha>'` should report 6 before tagging; nothing checks
+them for agreement. A tag is mutable and does not replace the SHA.
 
-**This deliberately is not PyPI.** Publishing was tried and reverted: the project is
-distributed from git, and GitHub release tags exist to say which commit a version is
-rather than to be installed from. The known cost is that a SHA
-cannot be written before the commit it names exists, so the pin trails the version bump by
-one commit. That is accepted rather than solved — the alternative traded it for a
-permanent dependency on an index that has to be trusted separately from the repository.
+**This deliberately is not PyPI.** Publishing was tried and reverted. Be precise about what
+that does and does not buy, because the obvious claim is wrong:
+
+A `git+` install is an sdist build, not a wheel download. uv resolves the build backend
+(`hatchling>=1.25,<2`) from PyPI into an isolated PEP 517 environment that `uv.lock` does
+not cover, executes it, and then resolves `fastmcp`, `httpx` and `pydantic-settings` from
+PyPI as well — `uv.lock` does not apply to a `uvx` or `uv tool` install either. So PyPI is
+still in the trust path on every cold cache, and this route strictly *adds* build-time code
+execution that a published wheel would not have, and gives up the PEP 740 attestation.
+
+What the SHA pin actually buys is narrower and still worth having: the *first-party* code —
+the part that receives `DATASHARE_API_KEY` — is fixed to one reviewed revision, so push
+access to this repository does not reach installed hosts. Third-party dependency risk is
+unchanged either way and is bounded only by the version ranges in `pyproject.toml`.
+
+Two known costs, accepted rather than solved: a SHA cannot be written before the commit it
+names exists, so the pin trails the version bump by one commit; and `git` becomes a
+run-time prerequisite, because uv shells out to the `git` binary for `git+` sources.
 
 ## `get_document_content` and `list_projects` return unvalidated JSON
 

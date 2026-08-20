@@ -21,6 +21,10 @@ tool names are `mcp__<sanitized server>_<tool>`. So the model sees
 
 - [`uv`](https://github.com/astral-sh/uv) on `PATH` (it provides `uvx`). Python ≥ 3.12 is
   fetched by `uv` itself.
+- **`git` on `PATH`.** The server installs from a `git+` source and uv shells out to the
+  `git` binary to fetch it, so without it the server fails to start on every cold cache.
+  This bites hardest under a host that launches from a minimal environment — the failure is
+  a build error, not an obvious "git not found".
 - A reachable Datashare instance and an API key for it. The repository's
   [`docker-compose.yml`](../../docker-compose.yml) brings up the local deployment this
   plugin defaults to.
@@ -188,28 +192,41 @@ access to the repository could substitute code that receives `DATASHARE_API_KEY`
 launch environment. A tag is mutable and is not an acceptable substitute for the SHA; the
 GitHub release tags exist to tell you *which* commit a version is, not to be installed from.
 
-This project is not published to PyPI. That is deliberate, not an oversight.
-
-To move to newer server code, replace the SHA with the reviewed commit you want and run:
-
-```bash
-uv cache clean datashare-mcp
-```
+To move to newer server code, replace the SHA with the reviewed commit you want. A new SHA
+is already a distinct cache key, so nothing stale can be served and no cache step is
+normally needed; `uv cache clean datashare-mcp` is a troubleshooting move, not part of the
+procedure.
 
 Do not add `--refresh` in place of updating the SHA; with a pinned commit it only re-fetches
 the same revision, and without a pin it defeats the pinning entirely.
 
-A release moves two independent things, in one commit each:
+A release moves two independent things.
 
-**The version**, in three files — `src/datashare_mcp/__init__.py` (which `pyproject.toml`
-reads dynamically), `plugins/datashare/.claude-plugin/plugin.json`, and `plugins[0].version`
-in `.claude-plugin/marketplace.json`. A stale catalog version makes `omp plugin upgrade`
-silently do nothing.
+**The version** — three files, three occurrences:
 
-**The install pin**, in three places — `plugins/datashare/.mcp.json`, the manual-install
-example above, and `README.md`'s install command and three client examples. The SHA cannot
-be written until the commit it names exists, so this necessarily trails the version bump by
-one commit; point it at the commit the release tag names.
+| File | What |
+| --- | --- |
+| `src/datashare_mcp/__init__.py` | `__version__`, which `pyproject.toml` reads dynamically |
+| `plugins/datashare/.claude-plugin/plugin.json` | `version` |
+| `.claude-plugin/marketplace.json` | `plugins[0].version` |
+
+**The install pin** — three files, six occurrences:
+
+| File | What |
+| --- | --- |
+| `plugins/datashare/.mcp.json` | the `--from` spec |
+| `plugins/datashare/README.md` | the "Two instances at once" example |
+| `README.md` | the install command and three client examples |
+
+Before tagging, check both mechanically: `git grep -c '<old version>'` should report 3 and
+`git grep -c '<old sha>'` should report 6. Nothing enforces either.
+
+**Bump the version whenever a shipped plugin file changes, even if the server code did
+not.** `omp plugin upgrade` compares the installed version against the *catalog* version, so
+republishing changed plugin files under the same version fetches nothing and every host
+already on it keeps the old files — including a stale `.mcp.json` pin, which is how a broken
+install path survives its own fix. The SHA cannot be written until the commit it names
+exists, so the pin necessarily trails the version bump by one commit.
 
 ## Local development
 

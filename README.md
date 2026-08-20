@@ -70,11 +70,15 @@ switch, not a default.
 
 ## Install
 
-Requires Python ≥ 3.12 and [`uv`](https://github.com/astral-sh/uv).
+Requires Python ≥ 3.12, [`uv`](https://github.com/astral-sh/uv), and **`git` on `PATH`** —
+uv shells out to the `git` binary to fetch a `git+` source, so without it every install and
+every cold cache fails. On macOS that means the Xcode Command Line Tools are installed, not
+just the `/usr/bin/git` stub.
 
 ```bash
 # Pin a reviewed commit: this server is handed your Datashare key, and an unpinned git+
-# spec builds and runs whatever the branch head happens to be. This is v0.3.0.
+# spec builds and runs whatever the branch head happens to be. The releases page maps each
+# version tag to its commit.
 uv tool install git+https://github.com/sapran/datashare-mcp.git@7da85209b9b33f8f186eee219333a411fdd1d511
 
 # Or, from a checkout:
@@ -82,10 +86,15 @@ uv sync --all-extras
 ```
 
 Not on PyPI, deliberately — installs come from git. A full 40-character commit SHA is the
-only reference that cannot move: a branch is
-force-pushable and a tag is mutable, and whatever that reference resolves to at launch is
-handed your Datashare key. Releases are tagged on GitHub so you can see which commit a
-version is; pin the SHA, not the tag. Keep a pin on every path below.
+only reference that cannot move: a branch is force-pushable and a tag is mutable, and
+whatever that reference resolves to at launch is handed your Datashare key. Releases are
+tagged on GitHub so you can see which commit a version is; pin the SHA, not the tag, and
+keep a pin on every path below.
+
+This fixes the *first-party* code only. The install still builds an sdist, so uv resolves
+the build backend and the runtime dependencies from PyPI at install time, within the ranges
+`pyproject.toml` allows. The pin means push access to this repository cannot reach your
+host; it is not a claim about the dependency tree.
 
 ## Configure
 
