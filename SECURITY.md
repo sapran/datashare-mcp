@@ -18,8 +18,9 @@ document from a real corpus.
 
 ## Supported versions
 
-The most recent release only. Fixes are published as a new version on PyPI; there are no
-backports.
+The most recent release only. Fixes land on `develop` and are marked by a new GitHub
+release tag; there are no backports. Because installs pin a commit SHA, updating means
+moving the pin to the fixed commit — a fix is not picked up automatically.
 
 ## What counts as a vulnerability here
 

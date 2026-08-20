@@ -9,8 +9,7 @@ remembers to tidy up.
 `0.3.0` now appears in `src/datashare_mcp/__init__.py` (the package version, which
 `pyproject.toml` reads dynamically), in `plugins/datashare/.claude-plugin/plugin.json`,
 and as `plugins[0].version` in `.claude-plugin/marketplace.json`. A release must bump all
-three together — and, since the plugin now installs `datashare-mcp==<version>`, the same
-string appears again in `plugins/datashare/.mcp.json` and both READMEs.
+three together.
 
 The failure mode is silent rather than loud: `omp plugin upgrade` compares the installed
 version against the **catalog** version, so a stale `marketplace.json` makes the upgrade a
@@ -29,22 +28,23 @@ a format string — and the only inputs are the operator's own `$USER`, `$DATASH
 `$DATASHARE_API_KEY` and login Keychain. Recorded so the property is a checked one rather
 than an assumed one.
 
-## The `uvx --from` spec is pinned to an exact PyPI version
+## The `uvx --from` spec is pinned to a commit SHA
 
-`plugins/datashare/.mcp.json` installs `datashare-mcp==<version>`. An unpinned spec would
-resolve to whatever is newest on every cold cache and hand the resulting code
-`DATASHARE_API_KEY`, so a compromised release would reach every installed host.
+`plugins/datashare/.mcp.json` installs from
+`git+https://github.com/sapran/datashare-mcp.git@<40-char sha>`. An unpinned spec would
+resolve the moving default-branch HEAD on every cold cache and hand the resulting code
+`DATASHARE_API_KEY`, so push access to the repository would reach every installed host.
+Bumping the server means replacing the SHA with a reviewed commit, in `.mcp.json`, the
+manual-install example and the `Pinning and updates` section of
+`plugins/datashare/README.md`, and the four install examples in `README.md`. A tag is
+mutable and does not replace the SHA.
 
-This replaced a `git+…@<40-char sha>` pin. The commit SHA was immutable, but it could not
-be written until the commit existed, which made every release a two-step dance: tag, then
-a follow-up commit to bump the pin. A PyPI version is immutable for the same practical
-reason — the index refuses to re-upload an existing version — while being knowable in
-advance, so the pin now moves in the same commit as the version bump. It also gains a PEP
-740 attestation, which a git ref has no equivalent of.
-
-Bumping the server means replacing the version in `.mcp.json`, the manual-install example
-and the `Pinning and updates` section of `plugins/datashare/README.md`, plus the three
-version files above. Nothing checks the six for agreement today.
+**This deliberately is not PyPI.** Publishing was tried and reverted: the project is
+distributed from git, and GitHub release tags exist to say which commit a version is
+rather than to be installed from. The known cost is that a SHA
+cannot be written before the commit it names exists, so the pin trails the version bump by
+one commit. That is accepted rather than solved — the alternative traded it for a
+permanent dependency on an index that has to be trusted separately from the repository.
 
 ## `get_document_content` and `list_projects` return unvalidated JSON
 

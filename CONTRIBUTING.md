@@ -27,10 +27,10 @@ uv run mypy
 uv run pytest -q
 ```
 
-`uv build` is worth running too, though CI does not: it runs only in `publish.yml`, gated
-on a published release. A change that breaks packaging — moving a module outside
-`src/datashare_mcp`, editing `[tool.hatch.build.targets.wheel]` — therefore passes PR CI
-green and fails at release time, when the tag already exists.
+`uv build` is worth running too, though nothing in CI does. The project is installed
+straight from git rather than from a built artifact, so a change that breaks packaging —
+moving a module outside `src/datashare_mcp`, editing `[tool.hatch.build.targets.wheel]` —
+stays invisible until someone tries to build it.
 
 `mypy` is configured `strict`. New code is expected to type-check without `# type: ignore`.
 
