@@ -9,8 +9,7 @@ remembers to tidy up.
 `0.3.0` now appears in `src/datashare_mcp/__init__.py` (the package version, which
 `pyproject.toml` reads dynamically), in `plugins/datashare/.claude-plugin/plugin.json`,
 and as `plugins[0].version` in `.claude-plugin/marketplace.json`. A release must bump all
-three together — and, since the plugin now installs `datashare-mcp==<version>`, the same
-string appears again in `plugins/datashare/.mcp.json` and both READMEs.
+three together.
 
 The failure mode is silent rather than loud: `omp plugin upgrade` compares the installed
 version against the **catalog** version, so a stale `marketplace.json` makes the upgrade a
@@ -29,22 +28,37 @@ a format string — and the only inputs are the operator's own `$USER`, `$DATASH
 `$DATASHARE_API_KEY` and login Keychain. Recorded so the property is a checked one rather
 than an assumed one.
 
-## The `uvx --from` spec is pinned to an exact PyPI version
+## The `uvx --from` spec is pinned to a commit SHA
 
-`plugins/datashare/.mcp.json` installs `datashare-mcp==<version>`. An unpinned spec would
-resolve to whatever is newest on every cold cache and hand the resulting code
-`DATASHARE_API_KEY`, so a compromised release would reach every installed host.
+`plugins/datashare/.mcp.json` installs from
+`git+https://github.com/sapran/datashare-mcp.git@<40-char sha>`. An unpinned spec would
+resolve the moving default-branch HEAD on every cold cache and hand the resulting code
+`DATASHARE_API_KEY`, so push access to the repository would reach every installed host.
+Bumping the server means replacing the SHA everywhere it appears literally. Six
+occurrences, three files: `plugins/datashare/.mcp.json`, the "Two instances at once"
+example at `plugins/datashare/README.md:136`, and the install command plus three client
+examples in `README.md`. The `Pinning and updates` prose writes `<sha>` as a placeholder
+and needs no edit. `git grep -c '<old sha>'` should report 6 before tagging; nothing checks
+them for agreement. A tag is mutable and does not replace the SHA.
 
-This replaced a `git+…@<40-char sha>` pin. The commit SHA was immutable, but it could not
-be written until the commit existed, which made every release a two-step dance: tag, then
-a follow-up commit to bump the pin. A PyPI version is immutable for the same practical
-reason — the index refuses to re-upload an existing version — while being knowable in
-advance, so the pin now moves in the same commit as the version bump. It also gains a PEP
-740 attestation, which a git ref has no equivalent of.
+**This deliberately is not PyPI.** Publishing was tried and reverted. Be precise about what
+that does and does not buy, because the obvious claim is wrong:
 
-Bumping the server means replacing the version in `.mcp.json`, the manual-install example
-and the `Pinning and updates` section of `plugins/datashare/README.md`, plus the three
-version files above. Nothing checks the six for agreement today.
+A `git+` install is an sdist build, not a wheel download. uv resolves the build backend
+(`hatchling>=1.25,<2`) from PyPI into an isolated PEP 517 environment that `uv.lock` does
+not cover, executes it, and then resolves `fastmcp`, `httpx` and `pydantic-settings` from
+PyPI as well — `uv.lock` does not apply to a `uvx` or `uv tool` install either. So PyPI is
+still in the trust path on every cold cache, and this route strictly *adds* build-time code
+execution that a published wheel would not have, and gives up the PEP 740 attestation.
+
+What the SHA pin actually buys is narrower and still worth having: the *first-party* code —
+the part that receives `DATASHARE_API_KEY` — is fixed to one reviewed revision, so push
+access to this repository does not reach installed hosts. Third-party dependency risk is
+unchanged either way and is bounded only by the version ranges in `pyproject.toml`.
+
+Two known costs, accepted rather than solved: a SHA cannot be written before the commit it
+names exists, so the pin trails the version bump by one commit; and `git` becomes a
+run-time prerequisite, because uv shells out to the `git` binary for `git+` sources.
 
 ## `get_document_content` and `list_projects` return unvalidated JSON
 

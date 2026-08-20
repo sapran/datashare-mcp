@@ -21,6 +21,10 @@ tool names are `mcp__<sanitized server>_<tool>`. So the model sees
 
 - [`uv`](https://github.com/astral-sh/uv) on `PATH` (it provides `uvx`). Python ≥ 3.12 is
   fetched by `uv` itself.
+- **`git` on `PATH`.** The server installs from a `git+` source and uv shells out to the
+  `git` binary to fetch it, so without it the server fails to start on every cold cache.
+  This bites hardest under a host that launches from a minimal environment — the failure is
+  a build error, not an obvious "git not found".
 - A reachable Datashare instance and an API key for it. The repository's
   [`docker-compose.yml`](../../docker-compose.yml) brings up the local deployment this
   plugin defaults to.
@@ -133,7 +137,7 @@ For a non-default instance, export `DATASHARE_URL` — and, off macOS, `DATASHAR
       "datashare-remote": {
         "type": "stdio",
         "command": "uvx",
-        "args": ["--from", "datashare-mcp==0.3.0", "datashare-mcp"],
+        "args": ["--from", "git+https://github.com/sapran/datashare-mcp.git@818ffd5fd56b2833d90b1b4a8f13fee6a78616e8", "datashare-mcp"],
         "env": {
           "DATASHARE_URL": "https://datashare.example.org",
           "DATASHARE_API_KEY": "<key>"
@@ -179,39 +183,50 @@ omp plugin upgrade datashare@datashare-mcp
 ```
 
 That refreshes the plugin files. The **server build** is resolved and cached separately by
-`uvx` from the pinned version in `.mcp.json`.
+`uvx` from the pinned commit in `.mcp.json`.
 
-The shipped `--from` spec pins an exact release: `datashare-mcp==0.3.0`. That is
-deliberate — an unpinned spec resolves to whatever is newest on every cold cache, so a
-compromised release would immediately receive `DATASHARE_API_KEY` from the launch
-environment. PyPI refuses to re-upload a version that already exists, so `==0.3.0` names
-one immutable artifact, and `publish.yml` attaches a PEP 740 attestation naming the
-workflow and commit that built it.
+The shipped `--from` spec pins a full 40-character commit SHA:
+`git+https://github.com/sapran/datashare-mcp.git@<sha>`. That is deliberate — an unpinned
+spec resolves the moving default-branch HEAD on every cold cache, so anyone with push
+access to the repository could substitute code that receives `DATASHARE_API_KEY` from the
+launch environment. A tag is mutable and is not an acceptable substitute for the SHA; the
+GitHub release tags exist to tell you *which* commit a version is, not to be installed from.
 
-To move to newer server code, replace the version with the release you want and run:
+To move to newer server code, replace the SHA with the reviewed commit you want. A new SHA
+is already a distinct cache key, so nothing stale can be served and no cache step is
+normally needed; `uv cache clean datashare-mcp` is a troubleshooting move, not part of the
+procedure.
 
-```bash
-uv cache clean datashare-mcp
-```
+Do not add `--refresh` in place of updating the SHA; with a pinned commit it only re-fetches
+the same revision, and without a pin it defeats the pinning entirely.
 
-Do not add `--refresh` in place of updating the version; with an exact pin it only
-re-fetches the same release, and without a pin it defeats the pinning entirely.
+A release moves two independent things.
 
-A release bumps the version everywhere it appears, in one commit. Six files, eleven
-occurrences:
+**The version** — three files, three occurrences:
 
 | File | What |
 | --- | --- |
 | `src/datashare_mcp/__init__.py` | `__version__`, which `pyproject.toml` reads dynamically |
 | `plugins/datashare/.claude-plugin/plugin.json` | `version` |
 | `.claude-plugin/marketplace.json` | `plugins[0].version` |
-| `plugins/datashare/.mcp.json` | the `datashare-mcp==<version>` install pin |
-| `plugins/datashare/README.md` | the manual-install example and this section |
+
+**The install pin** — three files, six occurrences:
+
+| File | What |
+| --- | --- |
+| `plugins/datashare/.mcp.json` | the `--from` spec |
+| `plugins/datashare/README.md` | the "Two instances at once" example |
 | `README.md` | the install command and three client examples |
 
-`git grep -c '<old version>'` before tagging; nothing checks the six for agreement. A stale
-catalog version makes `omp plugin upgrade` silently do nothing, and a stale `.mcp.json` pin
-leaves the plugin installing the previous release while the catalog advertises the new one.
+Before tagging, check both mechanically: `git grep -c '<old version>'` should report 3 and
+`git grep -c '<old sha>'` should report 6. Nothing enforces either.
+
+**Bump the version whenever a shipped plugin file changes, even if the server code did
+not.** `omp plugin upgrade` compares the installed version against the *catalog* version, so
+republishing changed plugin files under the same version fetches nothing and every host
+already on it keeps the old files — including a stale `.mcp.json` pin, which is how a broken
+install path survives its own fix. The SHA cannot be written until the commit it names
+exists, so the pin necessarily trails the version bump by one commit.
 
 ## Local development
 

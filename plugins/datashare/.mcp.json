@@ -5,7 +5,7 @@
       "command": "uvx",
       "args": [
         "--from",
-        "datashare-mcp==0.3.0",
+        "git+https://github.com/sapran/datashare-mcp.git@818ffd5fd56b2833d90b1b4a8f13fee6a78616e8",
         "datashare-mcp"
       ],
       "env": {

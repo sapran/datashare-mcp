@@ -18,8 +18,18 @@ document from a real corpus.
 
 ## Supported versions
 
-The most recent release only. Fixes are published as a new version on PyPI; there are no
-backports.
+The most recent release only. Fixes land on `develop`, the default branch, and are marked
+by a new GitHub release tag; there are no backports.
+
+**A fix is never picked up automatically**, because every install pins an exact commit. How
+you take one depends on how you installed:
+
+- **Plugin** (`omp plugin install` / `/plugin install`) — update the marketplace and run the
+  plugin upgrade. Do not hand-edit the pin in the plugin's `.mcp.json`: that file is managed
+  and your edit is overwritten on the next upgrade. If the upgrade reports nothing to do,
+  the catalog version has not been bumped yet — say so in the advisory thread.
+- **Any other client** — replace the SHA in your own `mcp.json` (or re-run `uv tool install`)
+  with the commit the release names.
 
 ## What counts as a vulnerability here
 

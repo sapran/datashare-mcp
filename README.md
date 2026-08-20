@@ -70,21 +70,31 @@ switch, not a default.
 
 ## Install
 
-Requires Python ≥ 3.12 and [`uv`](https://github.com/astral-sh/uv).
+Requires Python ≥ 3.12, [`uv`](https://github.com/astral-sh/uv), and **`git` on `PATH`** —
+uv shells out to the `git` binary to fetch a `git+` source, so without it every install and
+every cold cache fails. On macOS that means the Xcode Command Line Tools are installed, not
+just the `/usr/bin/git` stub.
 
 ```bash
-# Pin the exact version: this server is handed your Datashare key, and an unpinned spec
-# resolves to whatever happens to be newest at launch.
-uv tool install datashare-mcp==0.3.0
+# Pin a reviewed commit: this server is handed your Datashare key, and an unpinned git+
+# spec builds and runs whatever the branch head happens to be. The releases page maps each
+# version tag to its commit.
+uv tool install git+https://github.com/sapran/datashare-mcp.git@818ffd5fd56b2833d90b1b4a8f13fee6a78616e8
 
 # Or, from a checkout:
 uv sync --all-extras
 ```
 
-PyPI refuses to re-upload a version that already exists, so `==0.3.0` names one immutable
-artifact — the same guarantee a commit SHA gives — and it additionally carries a PEP 740
-attestation naming the workflow and commit that built it. Keep the `==` pin on every path
-below.
+Not on PyPI, deliberately — installs come from git. A full 40-character commit SHA is the
+only reference that cannot move: a branch is force-pushable and a tag is mutable, and
+whatever that reference resolves to at launch is handed your Datashare key. Releases are
+tagged on GitHub so you can see which commit a version is; pin the SHA, not the tag, and
+keep a pin on every path below.
+
+This fixes the *first-party* code only. The install still builds an sdist, so uv resolves
+the build backend and the runtime dependencies from PyPI at install time, within the ranges
+`pyproject.toml` allows. The pin means push access to this repository cannot reach your
+host; it is not a claim about the dependency tree.
 
 ## Configure
 
@@ -161,16 +171,17 @@ variable. Credentials, pinning, two instances at once and running from a checkou
     "datashare": {
       "type": "stdio",
       "command": "uvx",
-      "args": ["--from", "datashare-mcp==0.3.0", "datashare-mcp"]
+      "args": ["--from", "git+https://github.com/sapran/datashare-mcp.git@818ffd5fd56b2833d90b1b4a8f13fee6a78616e8", "datashare-mcp"]
     }
   }
 }
 ```
 
 No `env` block — credentials come from the environment the client itself runs in. Under omp
-this form is not plugin-namespaced, so its tools are `mcp__datashare_<tool>`. Keep the `==`
-pin: an unpinned spec resolves to whatever is newest at launch, in a process you have just
-handed your Datashare key.
+this form is not plugin-namespaced, so its tools are `mcp__datashare_<tool>`. Keep the
+commit pin: an unpinned `git+` spec builds and runs whatever the branch head is at launch,
+in a process you have just handed your Datashare key. A tag is mutable and is not an
+acceptable substitute for the SHA.
 
 ### Claude Desktop
 
@@ -181,7 +192,7 @@ handed your Datashare key.
   "mcpServers": {
     "datashare": {
       "command": "/Users/<you>/.local/bin/uvx",
-      "args": ["--from", "datashare-mcp==0.3.0", "datashare-mcp"],
+      "args": ["--from", "git+https://github.com/sapran/datashare-mcp.git@818ffd5fd56b2833d90b1b4a8f13fee6a78616e8", "datashare-mcp"],
       "env": {
         "DATASHARE_URL": "http://localhost:8888",
         "DATASHARE_API_KEY": "<your key>"
@@ -214,7 +225,7 @@ subprocess alive with the old config.
   "mcp": {
     "datashare": {
       "type": "local",
-      "command": ["uvx", "--from", "datashare-mcp==0.3.0", "datashare-mcp"],
+      "command": ["uvx", "--from", "git+https://github.com/sapran/datashare-mcp.git@818ffd5fd56b2833d90b1b4a8f13fee6a78616e8", "datashare-mcp"],
       "enabled": true,
       "environment": {
         "DATASHARE_URL": "http://localhost:8888",

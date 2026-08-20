@@ -22,8 +22,10 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13"]
     steps:
-      # Pinned to commit SHAs for the same reason as publish.yml: a tag is mutable, so
-      # `@v4` is a promise from whoever can move it. dependabot.yml bumps these.
+      # Pinned to full commit SHAs: a tag is mutable and a branch ref is force-pushable,
+      # so `@v4` is a promise from whoever controls the upstream ref, and this job runs
+      # their code. The trailing comment is the human-readable version; dependabot.yml
+      # rewrites the SHA and the comment together.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Otherwise the token lands in .git/config, readable by every dependency this
@@ -49,3 +51,11 @@ jobs:
 
       - name: Run tests
         run: uv run pytest -q
+
+      # Every install of this project builds the sdist from git — there is no published
+      # wheel — so packaging is on the path of every user, not just of a release. Without
+      # this step, moving a module out of src/datashare_mcp or breaking
+      # [tool.hatch.build.targets.wheel] passes CI green and fails on every fresh install
+      # and every cold uv cache.
+      - name: Build
+        run: uv build

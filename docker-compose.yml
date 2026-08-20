@@ -97,9 +97,10 @@ services:
     # The published image, pinned by DIGEST rather than by the `21.2.1` tag. A Docker tag
     # is mutable — this one was last re-pushed after 21.2.2 already existed — and these
     # containers write the external volumes below, which hold the only copy of the index
-    # and the SQLite state. Same argument the workflows make for pinning actions to a
-    # commit SHA and the plugin makes for `==` on PyPI; the containers were the last place
-    # left on a moving reference. The trailing comment is the human-readable version.
+    # and the SQLite state. Same argument the test workflow makes for pinning actions to a
+    # commit SHA and the plugin makes for pinning its own install to one; the containers
+    # were the last place left on a moving reference. The trailing comment is the
+    # human-readable version.
     #
     # When bumping, take the digest of the multi-arch INDEX, not of one platform's
     # manifest inside it — `docker buildx imagetools inspect <ref>` prints both, and the
