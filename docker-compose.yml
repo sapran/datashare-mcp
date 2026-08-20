@@ -3,8 +3,8 @@
 # This deploys the SERVER UNDER TEST, not the MCP server in this repository. The MCP
 # server runs on the host as a stdio subprocess of your MCP client; see README.md.
 #
-# It is designed to run ALONGSIDE the local Aleph stack, which holds ports 8080, 9200 and
-# 5000. Datashare is published on 8888 and its Elasticsearch on 9201. Only the host
+# Published on 8888 (app) and 9201 (Elasticsearch) rather than the defaults 8080 and
+# 9200, so it can sit next to another document stack without a port clash. Only the host
 # mapping moves — the containers still listen on 8080 and 9200 internally.
 #
 #   docker compose up -d          start
@@ -15,32 +15,33 @@
 # The two data volumes are `external`, so NO compose command can delete them, `down -v`
 # included. Only `docker volume rm` and `docker ... prune` can. See the `volumes:` block.
 #
-# Full runbook: docs/local-environment.md
+# Configuration: copy env.example to .env and set DATASHARE_DATA_DIR.
 
 name: datashare
 
 services:
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.8
-    # As on the Aleph stack. Also covers the case where Docker Desktop restarts and
-    # leaves every container without a policy stopped — observed on this machine.
+    # Pinned by digest for the same reason as `app` below: a tag is mutable, and this
+    # container owns the es-data volume holding the only copy of the index.
+    image: docker.elastic.co/elasticsearch/elasticsearch@sha256:1b6a877f18352510860ee065f01472bd37d33ac5eb1d943e0b9ed366b149638c # 8.19.8
+    # Also covers the case where the Docker daemon restarts and leaves every container
+    # without a policy stopped.
     restart: on-failure
-    # A cgroup ceiling on top of the heap, so that when this VM runs out of memory the
+    # A cgroup ceiling on top of the heap, so that when the host runs out of memory the
     # kernel kills the container that exceeded its own budget instead of an arbitrary
     # neighbour. Exit 137 on this container then means this container, legibly.
     #
     # The heap must leave room *inside* this ceiling for the JVM's off-heap use — Lucene
     # mmap accounting, direct buffers, metaspace, thread stacks. A 2 GB heap under a 3 GB
     # limit did not: the container sat at ~2.2 GB steady and was OOM-killed on every GC
-    # spike (observed: RestartCount 39, exit 137 in a loop). Raising the limit is not
-    # available — the sibling Aleph stack's ingest workers hold ~11 GB of this VM's
-    # 17.5 GB — so the heap comes down to fit the budget instead. This index is small
-    # (single-digit thousands of documents); 1 GB is ample.
+    # spike (observed: RestartCount 39, exit 137 in a loop). The heap comes down to fit
+    # the budget rather than the budget going up. A corpus of single-digit thousands of
+    # documents is served comfortably by 1 GB; raise both together for a larger one.
     mem_limit: 3g
     ports:
-      # Loopback only, as the sibling Aleph stack binds every published port. This
-      # Elasticsearch runs with xpack.security.enabled=false, so anything that can reach
-      # the port has unauthenticated read and write access to the index.
+      # Loopback only. This Elasticsearch runs with xpack.security.enabled=false, so
+      # anything that can reach the port has unauthenticated read and write access to the
+      # index.
       - "127.0.0.1:9201:9200"
     environment:
       # Carried over unchanged from the original deployment, not tuned. The existing
@@ -80,7 +81,7 @@ services:
       # answers HTTP 500 with UnknownHostException until the app is restarted by hand.
       #
       # `wait_for_status=yellow` matters: a bare /_cluster/health answers 200 whatever the
-      # colour, so a RED cluster (tenderchad unassigned or corrupt) would report healthy
+      # colour, so a RED cluster (the index unassigned or corrupt) would report healthy
       # and the app would start against an unusable index. A single-node cluster never
       # reaches green — it has no replicas — so yellow is the correct bar.
       test:
@@ -92,14 +93,25 @@ services:
       start_period: 30s
 
   app:
-    image: icij/datashare:21.2.1-ui
-    # This image exists only on this machine: it was built from a source tree that no
-    # longer exists locally and is archived at ~/backups/icij-datashare-21.2.1-ui.tar.gz.
-    # `icij/datashare` is also a public Docker Hub repository, so without this a lost
-    # local image would be silently replaced by whatever that tag resolves to upstream —
-    # a different build, run against volumes only 21.2.1 should touch. Fail instead, and
-    # recover with `docker load -i`.
-    pull_policy: never
+    image: icij/datashare@sha256:5e43e54c1fc1542bcf897e447613d9d7bd7f7e5db0a4a0fd8f489775701d5601 # 21.2.1
+    # The published image, pinned by DIGEST rather than by the `21.2.1` tag. A Docker tag
+    # is mutable — this one was last re-pushed after 21.2.2 already existed — and these
+    # containers write the external volumes below, which hold the only copy of the index
+    # and the SQLite state. Same argument the workflows make for pinning actions to a
+    # commit SHA and the plugin makes for `==` on PyPI; the containers were the last place
+    # left on a moving reference. The trailing comment is the human-readable version.
+    #
+    # When bumping, take the digest of the multi-arch INDEX, not of one platform's
+    # manifest inside it — `docker buildx imagetools inspect <ref>` prints both, and the
+    # per-platform ones are the first thing listed. Pinning `linux/amd64` here would work
+    # on CI and fail on every arm64 machine. `docker pull` reports the index digest, and
+    # so does `docker image inspect --format '{{index .RepoDigests 0}}'`.
+    #
+    # It carries the REST API this repository's MCP server talks to, but NOT the built web
+    # UI: there is no /home/datashare/app in it, so the browser interface 404s while every
+    # /api/... route works. That is the right trade for a stack whose purpose is developing
+    # and testing the MCP server. If you want the UI too, build the `-ui` variant from the
+    # ICIJ source tree and point these three services at it instead.
     restart: on-failure
     mem_limit: 3g
     depends_on:
@@ -109,7 +121,7 @@ services:
       # Loopback only. LOCAL mode does NOT enforce API-key authentication — it binds only
       # CsrfFilter and LocalUserFilter, never ApiKeyFilter — so anything that can reach
       # this port has full read AND write access to the corpus, key or no key. Publishing
-      # it on 0.0.0.0 would expose that to every network the laptop joins.
+      # it on 0.0.0.0 would expose that to every network the host joins.
       - "127.0.0.1:8888:8080"
     environment:
       DATASHARE_SYNC_NLP_MODELS: "false"
@@ -120,7 +132,7 @@ services:
       # directory as an empty one, which would start a healthy-looking instance serving
       # nothing. `:?` above catches an unset variable; this catches a wrong one.
       - type: bind
-        source: ${DATASHARE_DATA_DIR:?set DATASHARE_DATA_DIR in .env — see docs/local-environment.md}
+        source: ${DATASHARE_DATA_DIR:?set DATASHARE_DATA_DIR in .env — see env.example}
         target: /home/datashare/data
         read_only: true
         bind:
@@ -131,7 +143,7 @@ services:
       - --mode=LOCAL
       - --bind=0.0.0.0
       - --dataDir=/home/datashare/data
-      - --defaultProject=tenderchad
+      - --defaultProject=${DATASHARE_PROJECT:-demo}
       - --elasticsearchAddress=http://elasticsearch:9200
 
   # --- one-shot operations, not started by `up` --------------------------------
@@ -152,11 +164,8 @@ services:
     #
     # Re-ingests the corpus. Only needed if the index is lost. The CLI JVM may hang after
     # "exiting main"; once "drained N documents" appears it is done, Ctrl-C it.
-    # The plain icij/datashare:21.2.1 tag is no longer on this machine; -ui is a superset
-    # and runs CLI mode identically.
     profiles: ["tools"]
-    image: icij/datashare:21.2.1-ui
-    pull_policy: never
+    image: icij/datashare@sha256:5e43e54c1fc1542bcf897e447613d9d7bd7f7e5db0a4a0fd8f489775701d5601 # 21.2.1
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -168,7 +177,7 @@ services:
       # Same create_host_path: false as `app` — an ingest that silently indexes an empty
       # auto-created directory is the worst possible outcome here.
       - type: bind
-        source: ${DATASHARE_DATA_DIR:?set DATASHARE_DATA_DIR in .env — see docs/local-environment.md}
+        source: ${DATASHARE_DATA_DIR:?set DATASHARE_DATA_DIR in .env — see env.example}
         target: /home/datashare/data
         read_only: true
         bind:
@@ -176,7 +185,7 @@ services:
     command:
       - --mode=CLI
       - --dataDir=/home/datashare/data
-      - --defaultProject=tenderchad
+      - --defaultProject=${DATASHARE_PROJECT:-demo}
       - --stages=SCAN,INDEX
       - --elasticsearchAddress=http://elasticsearch:9200
 
@@ -190,8 +199,7 @@ services:
     # The key is printed in CLEARTEXT. Keep `--rm` so no container log retains it, clear
     # the scrollback afterwards, and never paste the output into an issue or a screenshot.
     profiles: ["tools"]
-    image: icij/datashare:21.2.1-ui
-    pull_policy: never
+    image: icij/datashare@sha256:5e43e54c1fc1542bcf897e447613d9d7bd7f7e5db0a4a0fd8f489775701d5601 # 21.2.1
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -207,9 +215,9 @@ volumes:
   # would create empty `datashare_es-data` / `datashare_dist`, presenting an instance with
   # no projects and no documents while the real data sat untouched under the old names.
   #
-  # `external: true` is the other half. These two volumes are the only copy of the
-  # 4884-document `tenderchad` index and of the SQLite project rows and API-key hash, and
-  # rebuilding them means a full re-ingest. Declaring them external puts them outside this
+  # `external: true` is the other half. These two volumes are the only copy of the index
+  # and of the SQLite project rows and API-key hash, and rebuilding them means a full
+  # re-ingest. Declaring them external puts them outside this
   # project's lifecycle, so `docker compose down -v` — a single stray flag on the ordinary
   # teardown command — cannot delete them. Under the `docker run` setup this file replaces,
   # no compose command could reach them at all; external keeps that property.

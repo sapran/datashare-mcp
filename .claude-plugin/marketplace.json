@@ -12,7 +12,7 @@
     {
       "name": "datashare",
       "source": "./plugins/datashare",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "description": "Read-only MCP server over the ICIJ Datashare HTTP API: 8 search/analytics/read tools, 3 resources, and the datashare-corpus method skill.",
       "category": "security",
       "keywords": ["datashare", "icij", "osint", "elasticsearch", "mcp", "investigation"],

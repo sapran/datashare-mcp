@@ -12,10 +12,10 @@ from datashare_mcp.readonly import _SEGMENT, ReadOnlyViolation, is_read_only, re
     ("method", "path"),
     [
         ("GET", "/api/project"),
-        ("POST", "/api/index/search/tenderchad/_search"),
-        ("GET", "/api/index/search/tenderchad/_mapping"),
-        ("GET", "/api/tenderchad/documents/abc123"),
-        ("GET", "/api/tenderchad/documents/content/abc123"),
+        ("POST", "/api/index/search/demo/_search"),
+        ("GET", "/api/index/search/demo/_mapping"),
+        ("GET", "/api/demo/documents/abc123"),
+        ("GET", "/api/demo/documents/content/abc123"),
     ],
 )
 def test_client_endpoints_are_allowed(method: str, path: str) -> None:
@@ -28,7 +28,7 @@ def test_trailing_slash_is_allowed() -> None:
 
 
 def test_document_id_charset_is_accepted_in_full() -> None:
-    assert is_read_only("GET", "/api/tenderchad/documents/a.b_c-1")
+    assert is_read_only("GET", "/api/demo/documents/a.b_c-1")
 
 
 # -- the refused set ----------------------------------------------------------
@@ -38,32 +38,32 @@ def test_document_id_charset_is_accepted_in_full() -> None:
     ("method", "path"),
     [
         # IndexResource administration routes sharing the /api/index prefix.
-        ("PUT", "/api/index/tenderchad"),
-        ("POST", "/api/index/tenderchad/_close"),
-        ("POST", "/api/index/tenderchad/_open"),
+        ("PUT", "/api/index/demo"),
+        ("POST", "/api/index/demo/_close"),
+        ("POST", "/api/index/demo/_open"),
         ("PUT", "/api/index/_snapshot/backup"),
         ("DELETE", "/api/index/_snapshot/backup"),
         ("PUT", "/api/index/_snapshot/backup/snap1"),
         ("DELETE", "/api/index/_snapshot/backup/snap1"),
         ("POST", "/api/index/_snapshot/backup/snap1/_restore"),
-        ("HEAD", "/api/index/search/tenderchad/_search"),
-        ("OPTIONS", "/api/index/tenderchad"),
-        ("OPTIONS", "/api/index/search/tenderchad/_search"),
+        ("HEAD", "/api/index/search/demo/_search"),
+        ("OPTIONS", "/api/index/demo"),
+        ("OPTIONS", "/api/index/search/demo/_search"),
         # Elasticsearch writes through the search proxy.
-        ("POST", "/api/index/search/tenderchad/_delete_by_query"),
-        ("POST", "/api/index/search/tenderchad/_update_by_query"),
-        ("POST", "/api/index/search/tenderchad/_bulk"),
+        ("POST", "/api/index/search/demo/_delete_by_query"),
+        ("POST", "/api/index/search/demo/_update_by_query"),
+        ("POST", "/api/index/search/demo/_bulk"),
         # GET is forwarded to any ES path by Datashare, so the path pin does the work.
-        ("GET", "/api/index/search/tenderchad/_cluster/settings"),
-        ("GET", "/api/index/search/tenderchad/_settings"),
+        ("GET", "/api/index/search/demo/_cluster/settings"),
+        ("GET", "/api/index/search/demo/_settings"),
         ("GET", "/api/index/search/_search/scroll"),
         ("POST", "/api/index/search/_search/scroll"),
         # Document and project writes.
-        ("DELETE", "/api/tenderchad/documents/d1"),
+        ("DELETE", "/api/demo/documents/d1"),
         ("POST", "/api/project/"),
-        ("DELETE", "/api/project/tenderchad"),
-        ("PUT", "/api/tenderchad/documents/tags/d1"),
-        ("POST", "/api/tenderchad/documents/batchUpdate/star"),
+        ("DELETE", "/api/project/demo"),
+        ("PUT", "/api/demo/documents/tags/d1"),
+        ("POST", "/api/demo/documents/batchUpdate/star"),
     ],
 )
 def test_write_requests_are_blocked(method: str, path: str) -> None:
@@ -77,7 +77,7 @@ def test_method_alone_refuses_an_allowlisted_path() -> None:
     DocumentResource.java at 21.2.1). The method pin is what keeps a mutating verb refused
     if one is ever added on the identical path, so this fails the moment someone drops the
     method from a pair."""
-    path = "/api/tenderchad/documents/d1"
+    path = "/api/demo/documents/d1"
     assert is_read_only("GET", path)
     for method in ("DELETE", "POST", "PUT", "PATCH"):
         assert not is_read_only(method, path)
@@ -86,9 +86,9 @@ def test_method_alone_refuses_an_allowlisted_path() -> None:
 def test_segment_cannot_widen_the_path() -> None:
     """`_SEGMENT` excludes `/`, which is what keeps the two document rules distinct and
     stops a segment from absorbing extra path elements."""
-    assert not is_read_only("GET", "/api/tenderchad/documents/content/d1/raw")
+    assert not is_read_only("GET", "/api/demo/documents/content/d1/raw")
     assert not is_read_only("POST", "/api/index/search/a/b/_search")
-    assert not is_read_only("GET", "/api/project/tenderchad")
+    assert not is_read_only("GET", "/api/project/demo")
 
 
 # -- end to end through the real client ---------------------------------------
@@ -97,23 +97,23 @@ def test_segment_cannot_widen_the_path() -> None:
 async def test_direct_write_through_the_client_never_reaches_the_wire(
     client: DatashareClient, respx_mock: respx.MockRouter
 ) -> None:
-    route = respx_mock.post("/api/index/tenderchad/_close").mock(
+    route = respx_mock.post("/api/index/demo/_close").mock(
         return_value=httpx.Response(200, json={})
     )
     with pytest.raises(ReadOnlyViolation, match="read-only"):
-        await client._http.post("/api/index/tenderchad/_close")
+        await client._http.post("/api/index/demo/_close")
     assert route.call_count == 0
 
 
 async def test_delete_by_query_never_reaches_the_wire(
     client: DatashareClient, respx_mock: respx.MockRouter
 ) -> None:
-    route = respx_mock.post("/api/index/search/tenderchad/_delete_by_query").mock(
+    route = respx_mock.post("/api/index/search/demo/_delete_by_query").mock(
         return_value=httpx.Response(200, json={})
     )
     with pytest.raises(ReadOnlyViolation):
         await client._http.post(
-            "/api/index/search/tenderchad/_delete_by_query",
+            "/api/index/search/demo/_delete_by_query",
             json={"query": {"match_all": {}}},
         )
     assert route.call_count == 0
@@ -148,16 +148,16 @@ def test_client_does_not_follow_redirects(client: DatashareClient) -> None:
 async def test_redirect_into_a_write_endpoint_is_never_replayed(
     client: DatashareClient, respx_mock: respx.MockRouter
 ) -> None:
-    respx_mock.get("/api/index/search/tenderchad/_mapping").mock(
+    respx_mock.get("/api/index/search/demo/_mapping").mock(
         return_value=httpx.Response(
-            307, headers={"Location": "http://datashare.test/api/index/tenderchad/_close"}
+            307, headers={"Location": "http://datashare.test/api/index/demo/_close"}
         )
     )
-    blocked = respx_mock.post("/api/index/tenderchad/_close").mock(
+    blocked = respx_mock.post("/api/index/demo/_close").mock(
         return_value=httpx.Response(200, json={})
     )
     with pytest.raises(Exception, match="307"):
-        await client.get_mapping(project="tenderchad")
+        await client.get_mapping(project="demo")
     assert blocked.call_count == 0
 
 
@@ -182,7 +182,7 @@ async def test_hook_refuses_a_hop_into_a_write_endpoint() -> None:
     """The guarantee that survives enabling follow_redirects."""
     hook = read_only_hook("http://datashare.test")
     with pytest.raises(ReadOnlyViolation, match="read-only"):
-        await hook(httpx.Request("POST", "http://datashare.test/api/index/tenderchad/_close"))
+        await hook(httpx.Request("POST", "http://datashare.test/api/index/demo/_close"))
 
 
 async def test_request_leaving_the_configured_host_is_blocked() -> None:
@@ -223,9 +223,9 @@ async def test_empty_path_is_normalised_to_root() -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        "/api/index/search/tenderchad%2F_close",
-        "/api/tenderchad/documents/..%2F..%2Fapi%2Findex%2Ftenderchad",
-        "/api/project%2F../index/tenderchad",
+        "/api/index/search/demo%2F_close",
+        "/api/demo/documents/..%2F..%2Fapi%2Findex%2Fdemo",
+        "/api/project%2F../index/demo",
     ],
 )
 async def test_encoded_traversal_cannot_reach_a_write(path: str) -> None:
@@ -241,10 +241,10 @@ async def test_encoded_traversal_cannot_reach_a_write(path: str) -> None:
         # wire carries the encoded form, which does not.
         ("GET", "/api/%2e%2e/documents/d1"),
         # Decodes to `.../_search`; the wire carries `_sea%72ch`.
-        ("POST", "/api/index/search/tenderchad/_sea%72ch"),
+        ("POST", "/api/index/search/demo/_sea%72ch"),
         # Every character of an allowlisted path, re-encoded.
         ("GET", "/api/%70roject"),
-        ("GET", "/api/index/search/tenderchad/%5Fmapping"),
+        ("GET", "/api/index/search/demo/%5Fmapping"),
     ],
 )
 async def test_percent_encoded_path_is_refused_even_when_it_decodes_to_an_allowed_one(
@@ -322,7 +322,7 @@ def test_validator_is_built_from_the_guard_charset() -> None:
     assert _SAFE_PATH_SEGMENT.pattern == _SEGMENT
 
 
-@pytest.mark.parametrize("value", ["tenderchad\n", "\ntenderchad", "tender chad", "a/b", "a%2Fb"])
+@pytest.mark.parametrize("value", ["demo\n", "\ndemo", "tender chad", "a/b", "a%2Fb"])
 def test_validator_rejects_whitespace_and_separators(value: str) -> None:
     """`re.match` with `^...$` would accept a trailing newline — Python's `$` matches
     before one. The validator uses `fullmatch`, so it does not."""
@@ -395,7 +395,7 @@ def test_validator_rejects_dot_only_segments(value: str) -> None:
         _validate_path_segment(value, field="doc_id")
 
 
-@pytest.mark.parametrize("value", ["a.b_c-1", "..a", "a..", "a..b", "tenderchad"])
+@pytest.mark.parametrize("value", ["a.b_c-1", "..a", "a..", "a..b", "demo"])
 def test_validator_still_accepts_dots_inside_a_segment(value: str) -> None:
     """Only an all-dots segment is a traversal; dots are legitimate in document ids."""
     from datashare_mcp.client import _validate_path_segment

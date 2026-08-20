@@ -120,7 +120,7 @@ constructed, so that no unvalidated caller input can reach the URL path.
 
 "Entire length" is normative rather than incidental: an anchored `^...$` match is NOT
 sufficient, because `$` also matches immediately before a trailing newline and would
-admit `tenderchad\n`.
+admit `demo\n`.
 
 The character set excludes `/`, `%`, whitespace and every other character, which is what
 keeps a caller-supplied value from traversing into or forging a different Datashare
@@ -138,12 +138,12 @@ route.
 
 #### Scenario: A project name carries a trailing newline
 
-- **WHEN** a tool is called with a `project` of `tenderchad\n`
+- **WHEN** a tool is called with a `project` of `demo\n`
 - **THEN** `ValueError` is raised and no request is sent
 
 #### Scenario: An ordinary identifier is supplied
 
-- **WHEN** a tool is called with `project` of `tenderchad` and a document id of
+- **WHEN** a tool is called with `project` of `demo` and a document id of
   alphanumerics, dots, underscores or hyphens
 - **THEN** the value is accepted and the request proceeds
 

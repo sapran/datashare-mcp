@@ -135,6 +135,6 @@ route.
 
 #### Scenario: An ordinary identifier is supplied
 
-- **WHEN** a tool is called with `project` of `tenderchad` and a document id of
+- **WHEN** a tool is called with `project` of `demo` and a document id of
   alphanumerics, dots, underscores or hyphens
 - **THEN** the value is accepted and the request proceeds

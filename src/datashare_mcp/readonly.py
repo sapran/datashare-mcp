@@ -18,7 +18,7 @@ import httpx
 # tool — reaches 127.0.0.1:8888 and 127.0.0.1:9201 unauthenticated, with full read and
 # write access, and this allowlist never sees those requests. What the allowlist buys is
 # that a compromised or mistaken *caller of this server* cannot turn it into the write
-# path. See docs/local-environment.md, "Trust boundary".
+# path. See the README, "What the allowlist is worth, and what it is not".
 #
 # The threat is specific and was read from ICIJ/datashare at tag 21.2.1, in
 # datashare-app/src/main/java/org/icij/datashare/web/IndexResource.java and
