@@ -1,6 +1,6 @@
 {
   "name": "datashare",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Read-only MCP server over the ICIJ Datashare HTTP API — 8 search/analytics/read tools plus the datashare-corpus method skill.",
   "author": { "name": "Vlad Styran", "email": "sapran@gmail.com" },
   "homepage": "https://github.com/sapran/datashare-mcp",

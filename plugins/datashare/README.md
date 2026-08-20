@@ -21,9 +21,9 @@ tool names are `mcp__<sanitized server>_<tool>`. So the model sees
 
 - [`uv`](https://github.com/astral-sh/uv) on `PATH` (it provides `uvx`). Python ≥ 3.12 is
   fetched by `uv` itself.
-- A reachable Datashare instance and an API key for it. See
-  [`docs/local-environment.md`](../../docs/local-environment.md) for the local deployment
-  this plugin defaults to.
+- A reachable Datashare instance and an API key for it. The repository's
+  [`docker-compose.yml`](../../docker-compose.yml) brings up the local deployment this
+  plugin defaults to.
 
 The server is read-only whatever the key permits: every outgoing request is matched
 against a fixed allowlist in `src/datashare_mcp/readonly.py` and refused before it is
@@ -33,8 +33,8 @@ authentication at all, so a read-only credential is not an available boundary.
 Read that as scoped: the allowlist bounds what *this server* sends, and a LOCAL-mode
 instance is unauthenticated to everything else on the host. Anything else in the same
 session that can make an HTTP request — a shell, a fetch tool — still has full read and
-write access to the corpus, and the allowlist never sees it. See "Trust boundary" in
-[`docs/local-environment.md`](../../docs/local-environment.md).
+write access to the corpus, and the allowlist never sees it. See "What the allowlist is
+worth, and what it is not" in the [repository README](../../README.md).
 
 ## Install (omp)
 
@@ -133,7 +133,7 @@ For a non-default instance, export `DATASHARE_URL` — and, off macOS, `DATASHAR
       "datashare-remote": {
         "type": "stdio",
         "command": "uvx",
-        "args": ["--from", "git+https://github.com/sapran/datashare-mcp.git@37a72ddad0b9d5e2b5650e57acc9b671ecabc5bc", "datashare-mcp"],
+        "args": ["--from", "datashare-mcp==0.3.0", "datashare-mcp"],
         "env": {
           "DATASHARE_URL": "https://datashare.example.org",
           "DATASHARE_API_KEY": "<key>"
@@ -179,22 +179,23 @@ omp plugin upgrade datashare@datashare-mcp
 ```
 
 That refreshes the plugin files. The **server build** is resolved and cached separately by
-`uvx` from the pinned commit in `.mcp.json`.
+`uvx` from the pinned version in `.mcp.json`.
 
-The shipped `--from` spec pins a full 40-character commit SHA:
-`git+https://github.com/sapran/datashare-mcp.git@<sha>`. That is deliberate — an unpinned
-spec resolves the moving default-branch HEAD on every cold cache, so anyone with push
-access to the repository could substitute code that receives `DATASHARE_API_KEY` from the
-launch environment. A tag is mutable and is not an acceptable substitute for the SHA.
+The shipped `--from` spec pins an exact release: `datashare-mcp==0.3.0`. That is
+deliberate — an unpinned spec resolves to whatever is newest on every cold cache, so a
+compromised release would immediately receive `DATASHARE_API_KEY` from the launch
+environment. PyPI refuses to re-upload a version that already exists, so `==0.3.0` names
+one immutable artifact, and `publish.yml` attaches a PEP 740 attestation naming the
+workflow and commit that built it.
 
-To move to newer server code, replace the SHA with the reviewed commit you want and run:
+To move to newer server code, replace the version with the release you want and run:
 
 ```bash
 uv cache clean datashare-mcp
 ```
 
-Do not add `--refresh` in place of updating the SHA; with a pinned commit it only re-fetches
-the same revision, and without a pin it defeats the pinning entirely.
+Do not add `--refresh` in place of updating the version; with an exact pin it only
+re-fetches the same release, and without a pin it defeats the pinning entirely.
 
 A release bumps the version in three places at once —
 `src/datashare_mcp/__init__.py`, `plugins/datashare/.claude-plugin/plugin.json`, and
