@@ -20,7 +20,7 @@ jobs:
       # ref execute code in this workflow — and the publish job below holds the PyPI
       # trusted-publisher identity. The trailing comment is the human-readable version;
       # dependabot.yml bumps both together.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # checkout leaves the token in .git/config by default, where every later step
           # in the job can read it — including the PEP 517 build backend, which is

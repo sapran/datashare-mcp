@@ -24,7 +24,7 @@ jobs:
     steps:
       # Pinned to commit SHAs for the same reason as publish.yml: a tag is mutable, so
       # `@v4` is a promise from whoever can move it. dependabot.yml bumps these.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Otherwise the token lands in .git/config, readable by every dependency this
           # job then installs and executes. The tests need the tree, not the token.
