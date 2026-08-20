@@ -12,6 +12,7 @@ dist/
 .env.local
 .DS_Store
 
-# Default corpus directory for docker-compose.yml (${DATASHARE_DATA_DIR:-./data}).
-# Never commit corpus documents.
+# A conventional place to keep a corpus inside the checkout. docker-compose.yml has no
+# default and requires DATASHARE_DATA_DIR to be set explicitly; this rule exists so that
+# pointing it here cannot commit corpus documents.
 /data/

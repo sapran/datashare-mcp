@@ -197,10 +197,21 @@ uv cache clean datashare-mcp
 Do not add `--refresh` in place of updating the version; with an exact pin it only
 re-fetches the same release, and without a pin it defeats the pinning entirely.
 
-A release bumps the version in three places at once —
-`src/datashare_mcp/__init__.py`, `plugins/datashare/.claude-plugin/plugin.json`, and
-`plugins[0].version` in `.claude-plugin/marketplace.json`. A stale catalog version makes
-`omp plugin upgrade` silently do nothing.
+A release bumps the version everywhere it appears, in one commit. Six files, eleven
+occurrences:
+
+| File | What |
+| --- | --- |
+| `src/datashare_mcp/__init__.py` | `__version__`, which `pyproject.toml` reads dynamically |
+| `plugins/datashare/.claude-plugin/plugin.json` | `version` |
+| `.claude-plugin/marketplace.json` | `plugins[0].version` |
+| `plugins/datashare/.mcp.json` | the `datashare-mcp==<version>` install pin |
+| `plugins/datashare/README.md` | the manual-install example and this section |
+| `README.md` | the install command and three client examples |
+
+`git grep -c '<old version>'` before tagging; nothing checks the six for agreement. A stale
+catalog version makes `omp plugin upgrade` silently do nothing, and a stale `.mcp.json` pin
+leaves the plugin installing the previous release while the catalog advertises the new one.
 
 ## Local development
 

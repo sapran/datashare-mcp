@@ -6,6 +6,9 @@ Report privately through GitHub's [private vulnerability
 reporting](https://github.com/sapran/datashare-mcp/security/advisories/new). Please do not
 open a public issue for something exploitable.
 
+If that link returns 404, private vulnerability reporting is not enabled yet — email
+`sapran@gmail.com` instead, and say that the advisory form was unavailable.
+
 Expect an acknowledgement within seven days. This is a community project maintained in
 spare time — there is no paid response commitment, and no bounty.
 

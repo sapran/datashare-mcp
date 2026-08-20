@@ -8,7 +8,7 @@ from datashare_mcp.config import Settings
 from tests.shapes import assert_content_payload, assert_project_list, assert_search_envelope
 
 LIVE = os.getenv("DATASHARE_LIVE_TESTS") == "1"
-PROJECT = os.getenv("DATASHARE_LIVE_PROJECT", "local-datashare")
+PROJECT = os.getenv("DATASHARE_LIVE_PROJECT", "demo")
 
 pytestmark = [
     pytest.mark.live,

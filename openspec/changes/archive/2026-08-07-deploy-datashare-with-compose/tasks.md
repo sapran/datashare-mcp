@@ -45,10 +45,10 @@ Needs Docker and the existing volumes; a contributor without them can only do se
       anything, and confirm the volume and bind sources are the existing ones.
 - [x] 3.2 Remove the two `docker run` containers and bring the stack up with
       `docker compose up -d`.
-- [x] 3.3 Confirm the data survived: `/version` answers, the `demo` count is still
+- [x] 3.3 Confirm the data survived: `/version` answers, the corpus count is still
       4884, and `/api/project/` still lists both projects (proving `datashare-dist` was
       adopted, not recreated).
-      *`/version` → 21.2.1; count → 4884; projects → `local-datashare`, `demo`. The
+      *`/version` → 21.2.1; count → 4884; projects → both registered rows. The
       `datashare.db` md5 is `d892bc3e…` both before and after the cutover, and
       `docker volume ls` shows no project-prefixed volume was created.*
 - [x] 3.4 Run the live suite against the composed instance.

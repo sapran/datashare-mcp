@@ -180,7 +180,7 @@ handed your Datashare key.
 {
   "mcpServers": {
     "datashare": {
-      "command": "uvx",
+      "command": "/Users/<you>/.local/bin/uvx",
       "args": ["--from", "datashare-mcp==0.3.0", "datashare-mcp"],
       "env": {
         "DATASHARE_URL": "http://localhost:8888",
@@ -191,8 +191,15 @@ handed your Datashare key.
 }
 ```
 
-Claude Desktop expands no shell variables, so the key is a literal in this file — `chmod
-600` it, or install the plugin instead, which reads the key from the login Keychain.
+**Use an absolute path for `command`.** Claude Desktop launches MCP servers from launchd
+with a minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`) and never reads your shell rc, so a
+bare `uvx` dies with `spawn uvx ENOENT` and the server simply never appears. Run
+`which uvx` and paste the result — commonly `~/.local/bin/uvx` from the uv installer or
+`/opt/homebrew/bin/uvx` under Homebrew. The same applies to `datashare-mcp` itself if you
+installed it with `uv tool install`.
+
+Claude Desktop also expands no shell variables, so the key is a literal in this file —
+`chmod 600` it, or install the plugin instead, which reads the key from the login Keychain.
 
 Then **quit Claude.app fully (Cmd-Q) and relaunch** — closing the window leaves the MCP
 subprocess alive with the old config.
@@ -285,11 +292,53 @@ for large documents use the tool with `offset`/`limit` instead).
 
 ## Local environment
 
-A local Datashare to develop and test against is a Docker Compose project. Copy
-[`env.example`](env.example) to `.env` and point `DATASHARE_DATA_DIR` at a directory of
-documents, then `docker compose up -d` from the repository root.
-[`docker-compose.yml`](docker-compose.yml) documents the topology, the volume handling and
-the API-key one-shot inline; the trust boundary is described above.
+A local Datashare to develop and test against is a Docker Compose project. First run, from
+the repository root:
+
+```bash
+# 1. Configuration. DATASHARE_DATA_DIR is required and must be an absolute path to a
+#    directory of documents; it is mounted read-only.
+cp env.example .env
+
+# 2. Create the two data volumes. They are declared `external` so that no compose command
+#    can delete them — which also means compose will not create them for you, and `up`
+#    fails with `external volume "datashare-es-data" not found` until you do.
+docker volume create datashare-es-data
+docker volume create datashare-dist
+
+# 3. Start.
+docker compose up -d
+
+# 4. Index the corpus. Stop the app first — the one-shots share its SQLite file and two
+#    processes must never write it at once. The CLI JVM may hang after "exiting main";
+#    once "drained N documents" appears, it is done.
+docker compose stop app
+docker compose --profile tools run --rm ingest
+
+# 5. Mint an API key. Datashare cannot show you an existing one, only mint a new one, so
+#    this invalidates any key already in use. It is printed in cleartext.
+docker compose --profile tools run --rm apikey
+docker compose start app
+```
+
+CLI ingest creates the Elasticsearch index but **not** the relational project row, and
+without that row `/api/index/...` answers 401 and `list_projects` comes back empty. Register
+it once, with the key from step 5:
+
+```bash
+KEY=<the key printed in step 5>
+curl -s -H "Authorization: Bearer $KEY" -H "X-DS-CSRF-TOKEN: x" -b "_ds_csrf_token=x" \
+  -H "Content-Type: application/json" -X POST http://localhost:8888/api/project/ \
+  -d '{"name":"demo","label":"demo","sourcePath":"/home/datashare/data"}'
+
+# Verify:
+curl -s -H "Authorization: Bearer $KEY" http://localhost:8888/api/project/
+```
+
+The name must match `DATASHARE_PROJECT` in `.env`. [`docker-compose.yml`](docker-compose.yml)
+documents the topology, the volume handling and both one-shots inline; the trust boundary is
+described above. Note that the published image serves the REST API but not the web UI, so
+`http://localhost:8888` in a browser will 404.
 
 ## Develop
 

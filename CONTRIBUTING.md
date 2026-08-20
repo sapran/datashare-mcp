@@ -19,14 +19,18 @@ A local Datashare to test against is a Docker Compose project: copy `env.example
 
 ## What CI runs
 
-These four, on Python 3.12 and 3.13. Run them before opening a pull request:
+These three, on Python 3.12 and 3.13. Run them before opening a pull request:
 
 ```bash
 uv run ruff check .
 uv run mypy
 uv run pytest -q
-uv build
 ```
+
+`uv build` is worth running too, though CI does not: it runs only in `publish.yml`, gated
+on a published release. A change that breaks packaging — moving a module outside
+`src/datashare_mcp`, editing `[tool.hatch.build.targets.wheel]` — therefore passes PR CI
+green and fails at release time, when the tag already exists.
 
 `mypy` is configured `strict`. New code is expected to type-check without `# type: ignore`.
 

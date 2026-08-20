@@ -21,7 +21,9 @@ name: datashare
 
 services:
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.8
+    # Pinned by digest for the same reason as `app` below: a tag is mutable, and this
+    # container owns the es-data volume holding the only copy of the index.
+    image: docker.elastic.co/elasticsearch/elasticsearch@sha256:1b6a877f18352510860ee065f01472bd37d33ac5eb1d943e0b9ed366b149638c # 8.19.8
     # Also covers the case where the Docker daemon restarts and leaves every container
     # without a policy stopped.
     restart: on-failure
@@ -91,14 +93,25 @@ services:
       start_period: 30s
 
   app:
-    image: icij/datashare:21.2.1
-    # The published image. It carries the REST API this repository's MCP server talks to,
-    # but NOT the built web UI: there is no /home/datashare/app in it, so the browser
-    # interface 404s while every /api/... route works. That is the right trade for a stack
-    # whose purpose is developing and testing the MCP server. If you want the UI too,
-    # build the `-ui` variant from the ICIJ source tree and point these three services at
-    # it instead. Pinned to an exact version, never `latest`: the volumes below hold an
-    # index only this version should touch.
+    image: icij/datashare@sha256:5e43e54c1fc1542bcf897e447613d9d7bd7f7e5db0a4a0fd8f489775701d5601 # 21.2.1
+    # The published image, pinned by DIGEST rather than by the `21.2.1` tag. A Docker tag
+    # is mutable — this one was last re-pushed after 21.2.2 already existed — and these
+    # containers write the external volumes below, which hold the only copy of the index
+    # and the SQLite state. Same argument the workflows make for pinning actions to a
+    # commit SHA and the plugin makes for `==` on PyPI; the containers were the last place
+    # left on a moving reference. The trailing comment is the human-readable version.
+    #
+    # When bumping, take the digest of the multi-arch INDEX, not of one platform's
+    # manifest inside it — `docker buildx imagetools inspect <ref>` prints both, and the
+    # per-platform ones are the first thing listed. Pinning `linux/amd64` here would work
+    # on CI and fail on every arm64 machine. `docker pull` reports the index digest, and
+    # so does `docker image inspect --format '{{index .RepoDigests 0}}'`.
+    #
+    # It carries the REST API this repository's MCP server talks to, but NOT the built web
+    # UI: there is no /home/datashare/app in it, so the browser interface 404s while every
+    # /api/... route works. That is the right trade for a stack whose purpose is developing
+    # and testing the MCP server. If you want the UI too, build the `-ui` variant from the
+    # ICIJ source tree and point these three services at it instead.
     restart: on-failure
     mem_limit: 3g
     depends_on:
@@ -152,7 +165,7 @@ services:
     # Re-ingests the corpus. Only needed if the index is lost. The CLI JVM may hang after
     # "exiting main"; once "drained N documents" appears it is done, Ctrl-C it.
     profiles: ["tools"]
-    image: icij/datashare:21.2.1
+    image: icij/datashare@sha256:5e43e54c1fc1542bcf897e447613d9d7bd7f7e5db0a4a0fd8f489775701d5601 # 21.2.1
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -186,7 +199,7 @@ services:
     # The key is printed in CLEARTEXT. Keep `--rm` so no container log retains it, clear
     # the scrollback afterwards, and never paste the output into an issue or a screenshot.
     profiles: ["tools"]
-    image: icij/datashare:21.2.1
+    image: icij/datashare@sha256:5e43e54c1fc1542bcf897e447613d9d7bd7f7e5db0a4a0fd8f489775701d5601 # 21.2.1
     depends_on:
       elasticsearch:
         condition: service_healthy
