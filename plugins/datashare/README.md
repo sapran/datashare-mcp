@@ -137,7 +137,7 @@ For a non-default instance, export `DATASHARE_URL` — and, off macOS, `DATASHAR
       "datashare-remote": {
         "type": "stdio",
         "command": "uvx",
-        "args": ["--from", "git+https://github.com/sapran/datashare-mcp.git@7da85209b9b33f8f186eee219333a411fdd1d511", "datashare-mcp"],
+        "args": ["--from", "git+https://github.com/sapran/datashare-mcp.git@818ffd5fd56b2833d90b1b4a8f13fee6a78616e8", "datashare-mcp"],
         "env": {
           "DATASHARE_URL": "https://datashare.example.org",
           "DATASHARE_API_KEY": "<key>"

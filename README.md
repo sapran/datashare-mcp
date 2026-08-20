@@ -79,7 +79,7 @@ just the `/usr/bin/git` stub.
 # Pin a reviewed commit: this server is handed your Datashare key, and an unpinned git+
 # spec builds and runs whatever the branch head happens to be. The releases page maps each
 # version tag to its commit.
-uv tool install git+https://github.com/sapran/datashare-mcp.git@7da85209b9b33f8f186eee219333a411fdd1d511
+uv tool install git+https://github.com/sapran/datashare-mcp.git@818ffd5fd56b2833d90b1b4a8f13fee6a78616e8
 
 # Or, from a checkout:
 uv sync --all-extras
@@ -171,7 +171,7 @@ variable. Credentials, pinning, two instances at once and running from a checkou
     "datashare": {
       "type": "stdio",
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/sapran/datashare-mcp.git@7da85209b9b33f8f186eee219333a411fdd1d511", "datashare-mcp"]
+      "args": ["--from", "git+https://github.com/sapran/datashare-mcp.git@818ffd5fd56b2833d90b1b4a8f13fee6a78616e8", "datashare-mcp"]
     }
   }
 }
@@ -192,7 +192,7 @@ acceptable substitute for the SHA.
   "mcpServers": {
     "datashare": {
       "command": "/Users/<you>/.local/bin/uvx",
-      "args": ["--from", "git+https://github.com/sapran/datashare-mcp.git@7da85209b9b33f8f186eee219333a411fdd1d511", "datashare-mcp"],
+      "args": ["--from", "git+https://github.com/sapran/datashare-mcp.git@818ffd5fd56b2833d90b1b4a8f13fee6a78616e8", "datashare-mcp"],
       "env": {
         "DATASHARE_URL": "http://localhost:8888",
         "DATASHARE_API_KEY": "<your key>"
@@ -225,7 +225,7 @@ subprocess alive with the old config.
   "mcp": {
     "datashare": {
       "type": "local",
-      "command": ["uvx", "--from", "git+https://github.com/sapran/datashare-mcp.git@7da85209b9b33f8f186eee219333a411fdd1d511", "datashare-mcp"],
+      "command": ["uvx", "--from", "git+https://github.com/sapran/datashare-mcp.git@818ffd5fd56b2833d90b1b4a8f13fee6a78616e8", "datashare-mcp"],
       "enabled": true,
       "environment": {
         "DATASHARE_URL": "http://localhost:8888",
