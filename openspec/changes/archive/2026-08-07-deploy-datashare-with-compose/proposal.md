@@ -68,7 +68,7 @@ does. `.openspec.yaml` sets `skip_specs: true` accordingly.
 
 - Adds `docker-compose.yml`; rewrites `docs/local-environment.md`.
 - **The two existing named volumes must be adopted, not recreated.** `datashare-es-data`
-  holds the 4884-document `tenderchad` index and `datashare-dist` holds the SQLite project
+  holds the 4884-document `demo` index and `datashare-dist` holds the SQLite project
   rows and the API-key hash. Compose prefixes volume names with the project name by
   default, which would silently create two empty volumes and present an instance with no
   data. Both are therefore pinned with an explicit `name:` **and** declared

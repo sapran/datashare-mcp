@@ -6,8 +6,8 @@ the key that moved. These builders emit the full shape a real instance returns, 
 assertions below are used by both the mocked suite and `tests/live/`, so the two check the
 same thing rather than drifting apart.
 
-Shapes were read off the live `tenderchad` instance (Datashare 21.2.1, Elasticsearch
-8.19.8).
+Shapes were read off a live Datashare 21.2.1 with Elasticsearch 8.19.8 rather than
+hand-written from the API documentation.
 """
 
 from datetime import UTC, datetime
@@ -22,7 +22,7 @@ CONTENT_KEYS = frozenset({"content", "maxOffset", "offset", "limit", "targetLang
 PROJECT_KEYS = frozenset({"name", "label", "sourcePath"})
 
 
-def project(*, name: str = "tenderchad", **extra: Any) -> dict[str, Any]:
+def project(*, name: str = "demo", **extra: Any) -> dict[str, Any]:
     """One row of the `/api/project/` list."""
     row: dict[str, Any] = {
         "name": name,
@@ -39,8 +39,8 @@ def project(*, name: str = "tenderchad", **extra: Any) -> dict[str, Any]:
 
 
 def project_list(*names: str) -> list[dict[str, Any]]:
-    """The `/api/project/` payload. Defaults to the two projects the local instance holds."""
-    return [project(name=n) for n in (names or ("tenderchad", "local-datashare"))]
+    """The `/api/project/` payload. Defaults to two distinct projects."""
+    return [project(name=n) for n in (names or ("demo", "local-datashare"))]
 
 
 def search_hit(
@@ -52,7 +52,7 @@ def search_hit(
 ) -> dict[str, Any]:
     """One `hits.hits[]` entry, including the `_routing` a caller must carry forward."""
     hit: dict[str, Any] = {
-        "_index": "tenderchad",
+        "_index": "demo",
         "_id": id,
         "_score": 1.0,
         "_source": source

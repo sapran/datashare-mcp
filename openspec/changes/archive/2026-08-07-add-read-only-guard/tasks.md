@@ -38,4 +38,4 @@ may not have.
 
 - [x] 4.1 Run the live suite against the local instance and confirm all four smoke tests
       pass, proving no legitimate read was blocked by the allowlist.
-      *4 passed against `tenderchad` (4884 documents) on `http://localhost:8888`.*
+      *4 passed against `demo` (4884 documents) on `http://localhost:8888`.*

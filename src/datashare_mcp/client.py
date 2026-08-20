@@ -15,7 +15,7 @@ from .readonly import _SEGMENT, read_only_hook
 
 # Built from the guard's own charset, not a second copy of it: the input validator and
 # readonly.py cannot drift apart. `fullmatch`, not `match` with `^...$` — Python's `$`
-# also matches immediately before a trailing newline, which would admit "tenderchad\n".
+# also matches immediately before a trailing newline, which would admit "demo\n".
 _SAFE_PATH_SEGMENT = re.compile(_SEGMENT)
 
 

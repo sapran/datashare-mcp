@@ -19,7 +19,7 @@ API-key authentication at all (only `LocalUserFilter`).
 
 #### Scenario: A mutating request is issued directly on the transport
 
-- **WHEN** code inside this server issues `POST /api/index/tenderchad/_close` on the
+- **WHEN** code inside this server issues `POST /api/index/demo/_close` on the
   client's transport
 - **THEN** `ReadOnlyViolation` is raised, and the Datashare instance receives no request
 
@@ -70,12 +70,12 @@ path pin is the whole of the protection.
 
 #### Scenario: An index-creation request is attempted
 
-- **WHEN** `PUT /api/index/tenderchad` is attempted
+- **WHEN** `PUT /api/index/demo` is attempted
 - **THEN** it is refused
 
 #### Scenario: An index-close request is attempted
 
-- **WHEN** `POST /api/index/tenderchad/_close` is attempted
+- **WHEN** `POST /api/index/demo/_close` is attempted
 - **THEN** it is refused, and the corpus is not taken offline
 
 #### Scenario: A snapshot restore is attempted
@@ -102,13 +102,13 @@ make this requirement load-bearing rather than redundant:
 
 #### Scenario: A delete-by-query is attempted
 
-- **WHEN** `POST /api/index/search/tenderchad/_delete_by_query` is attempted
+- **WHEN** `POST /api/index/search/demo/_delete_by_query` is attempted
 - **THEN** it is refused before the request is sent, whether or not Datashare would also
   have refused it
 
 #### Scenario: A GET reaches for an arbitrary cluster path
 
-- **WHEN** `GET /api/index/search/tenderchad/_cluster/settings` is attempted
+- **WHEN** `GET /api/index/search/demo/_cluster/settings` is attempted
 - **THEN** it is refused, even though Datashare's own check would forward any GET path
 
 ### Requirement: A request leaving the configured origin is refused
@@ -213,7 +213,7 @@ in raw and decoded form and no caller value can extend the path.
 
 #### Scenario: A caller value carries trailing whitespace
 
-- **WHEN** a `project` of `tenderchad\n` is supplied
+- **WHEN** a `project` of `demo\n` is supplied
 - **THEN** input validation raises `ValueError` and no request is built
 
 #### Scenario: The accepted character set is inspected
